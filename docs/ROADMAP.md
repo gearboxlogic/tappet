@@ -16,7 +16,7 @@ Work:
 - rename module, imports, binaries, and docs from Lazy MCP to CapScope
 - establish upstream attribution and license notices
 - add CI for tests, race detection, vet, formatting, and static analysis
-- record current tool-surface and startup benchmarks
+- record current tool-surface and startup benchmarks ([Milestone 0 baseline](BASELINE_BENCHMARKS.md))
 
 Exit criteria:
 
