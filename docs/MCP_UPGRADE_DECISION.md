@@ -1,6 +1,6 @@
 # MCP SDK upgrade target
 
-Status: accepted target for Milestone 1
+Status: selected compatibility-test target for Milestone 1; adoption is gated on the minimum Go toolchain decision
 
 Decision date: 2026-08-19
 
@@ -12,9 +12,20 @@ Keep `github.com/mark3labs/mcp-go v0.43.2` in Milestone 0. Target `github.com/ma
 
 The upgrade is not needed for characterization, rebranding, common server construction, or CI. Including it here would mix protocol behavior changes into a compatibility baseline.
 
+## Minimum Go toolchain gate
+
+The selected tag's [`go.mod`](https://github.com/mark3labs/mcp-go/blob/v1.0.0-beta.1/go.mod) declares Go `1.25.5`. CapScope currently declares Go `1.24.0`; CI selects that version from `go.mod` and the Docker builder uses the Go 1.24 image line. Adopting this SDK tag therefore also requires an explicit minimum-toolchain change. It is not only an SDK or protocol compatibility update.
+
+Before accepting the beta dependency for production, Milestone 1 must decide whether to:
+
+- raise CapScope's minimum Go version to at least `1.25.5` and update `go.mod`, CI, the Docker builder, contributor documentation, and supported local environments together; or
+- evaluate another SDK target if retaining the Go 1.24 baseline is a requirement.
+
+The `mcp-go` beta remains the first experiment because it is the first tag containing the required modern-protocol commit. It should be adopted only if the coordinated toolchain change is acceptable, the beta passes the modern and legacy conformance matrix below, typed results and errors remain intact, and provider lifecycle behavior remains controllable. A newer stable `mcp-go` tag or the official Go SDK should be preferred if it meets those criteria before Milestone 1 begins.
+
 ## Current behavior
 
-CapScope calls `Initialize` explicitly in `internal/hierarchy.newProviderClient`, `internal/client.Client.AddToMCPServer`, and `structure_generator/cmd.fetchServerTools`. With `mcp-go v0.43.2`, those calls use the legacy initialize handshake and protocol-session behavior. The outward server uses the same dependency for stdio, SSE, and Streamable HTTP.
+CapScope calls `Initialize` explicitly in `internal/hierarchy.newProviderClient`, `internal/client.Client.AddToMCPServer`, and `structure_generator/cmd.fetchToolsFromServer`. With `mcp-go v0.43.2`, those calls use the legacy initialize handshake and protocol-session behavior. The outward server uses the same dependency for stdio, SSE, and Streamable HTTP.
 
 ## Negotiation in the target
 
