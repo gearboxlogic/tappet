@@ -5,12 +5,12 @@ import "encoding/json"
 // Tool represents an MCP tool definition per the 2025-06-18 spec
 // https://modelcontextprotocol.io/specification/2025-06-18/server/tools
 type Tool struct {
-	Name        string                 `json:"name"`                  // Required: unique identifier
-	Title       string                 `json:"title,omitempty"`       // Optional: human-readable display name
-	Description string                 `json:"description,omitempty"` // Optional: what the tool does
-	InputSchema map[string]interface{} `json:"inputSchema"`           // Required: JSON Schema for parameters
+	Name         string                 `json:"name"`                   // Required: unique identifier
+	Title        string                 `json:"title,omitempty"`        // Optional: human-readable display name
+	Description  string                 `json:"description,omitempty"`  // Optional: what the tool does
+	InputSchema  map[string]interface{} `json:"inputSchema"`            // Required: JSON Schema for parameters
 	OutputSchema map[string]interface{} `json:"outputSchema,omitempty"` // Optional: JSON Schema for output (2025-06-18)
-	Annotations map[string]interface{} `json:"annotations,omitempty"`  // Optional: metadata for clients
+	Annotations  map[string]interface{} `json:"annotations,omitempty"`  // Optional: metadata for clients
 }
 
 // ServerTools represents all tools from a single MCP server
@@ -38,8 +38,8 @@ type ToolNode struct {
 type ToolDefinition struct {
 	Title        string                 `json:"title,omitempty"`
 	Description  string                 `json:"description,omitempty"`
-	MapsTo       string                 `json:"maps_to,omitempty"`        // Maps to actual MCP tool name
-	Server       string                 `json:"server"`                   // The MCP server that provides this tool (required)
+	MapsTo       string                 `json:"maps_to,omitempty"` // Maps to actual MCP tool name
+	Server       string                 `json:"server"`            // The MCP server that provides this tool (required)
 	InputSchema  map[string]interface{} `json:"inputSchema,omitempty"`
 	OutputSchema map[string]interface{} `json:"outputSchema,omitempty"`
 	Annotations  map[string]interface{} `json:"annotations,omitempty"`
@@ -96,9 +96,9 @@ type ToolGroup struct {
 
 // CategorizedServer represents a server assigned to a domain category
 type CategorizedServer struct {
-	ServerName     string
-	DomainCategory DomainCategory
-	ToolGroups     []ToolGroup
+	ServerName      string
+	DomainCategory  DomainCategory
+	ToolGroups      []ToolGroup
 	StandaloneTools []Tool // Tools that don't fit into any group
 }
 

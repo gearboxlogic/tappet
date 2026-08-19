@@ -433,7 +433,7 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 
 	// Serialize tool calls to the same server to prevent concurrent stdio access.
 	// Stdio is a single-channel transport that cannot handle interleaved messages.
-	// See: https://github.com/voicetreelab/lazy-mcp/issues/8
+	// This protects mcp-go v0.43.2 stdio writes, which are not framed by a transport write mutex.
 	mutex := registry.GetClientMutex(serverName)
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -443,7 +443,7 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	callRequest.Params.Name = actualToolName
 	callRequest.Params.Arguments = arguments
 
-	result, err := client.GetClient().CallTool(toolCtx, callRequest)
+	result, err := client.CallTool(toolCtx, callRequest)
 	if err != nil {
 		// Include inputSchema in error message to help LLMs self-correct parameter mistakes
 		if toolDef.InputSchema != nil {
@@ -472,18 +472,33 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 
 // ServerRegistry manages MCP client connections
 type ServerRegistry struct {
-	clients       map[string]*client.Client
+	clients       map[string]ProviderClient
 	clientMutex   map[string]*sync.Mutex // Per-client mutex for serializing tool calls
 	serverConfigs map[string]*config.MCPClientConfigV2
+	clientFactory ProviderClientFactory
 	mu            sync.RWMutex
 }
 
+// ProviderClient is the part of a downstream MCP client used by the hierarchy.
+type ProviderClient interface {
+	CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	Close() error
+}
+
+// ProviderClientFactory starts and initializes one downstream MCP client.
+type ProviderClientFactory func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error)
+
 // NewServerRegistry creates a new server registry with server configurations
 func NewServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2) *ServerRegistry {
+	return newServerRegistry(serverConfigs, newProviderClient)
+}
+
+func newServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2, factory ProviderClientFactory) *ServerRegistry {
 	return &ServerRegistry{
-		clients:       make(map[string]*client.Client),
+		clients:       make(map[string]ProviderClient),
 		clientMutex:   make(map[string]*sync.Mutex),
 		serverConfigs: serverConfigs,
+		clientFactory: factory,
 	}
 }
 
@@ -506,7 +521,7 @@ func (r *ServerRegistry) GetClientMutex(serverName string) *sync.Mutex {
 
 // GetOrLoadServer gets an existing client or creates and initializes a new one
 // This implements lazy loading - servers are only started when first accessed
-func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string) (*client.Client, error) {
+func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string) (ProviderClient, error) {
 	// First check with read lock
 	r.mu.RLock()
 	if client, exists := r.clients[serverName]; exists {
@@ -530,41 +545,44 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 		return nil, fmt.Errorf("server config not found: %s", serverName)
 	}
 
-	// Create the MCP client
+	mcpClient, err := r.clientFactory(ctx, serverName, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store the client
+	r.clients[serverName] = mcpClient
+
+	return mcpClient, nil
+}
+
+func newProviderClient(ctx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
 	mcpClient, err := client.NewMCPClient(serverName, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
-	// Start the client if needed
 	if mcpClient.NeedManualStart() {
-		err := mcpClient.GetClient().Start(ctx)
-		if err != nil {
+		if err := mcpClient.GetClient().Start(ctx); err != nil {
+			_ = mcpClient.Close()
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
 	}
 
-	// Initialize the client
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{Name: "mcp-proxy-recursive"}
+	initRequest.Params.ClientInfo = mcp.Implementation{Name: "capscope"}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
-	_, err = mcpClient.GetClient().Initialize(ctx, initRequest)
-	if err != nil {
+	if _, err := mcpClient.GetClient().Initialize(ctx, initRequest); err != nil {
+		_ = mcpClient.Close()
 		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
 
-	log.Printf("Created and initialized MCP client for server: %s", serverName)
-
-	// Store the client
-	r.clients[serverName] = mcpClient
-
-	// Start ping task if needed
+	log.Printf("Created and initialized MCP client for provider: %s", serverName)
 	if mcpClient.NeedPing() {
 		go mcpClient.StartPingTask(ctx)
 	}
-
 	return mcpClient, nil
 }
 
@@ -579,6 +597,6 @@ func (r *ServerRegistry) Close() {
 	}
 
 	// Clear the clients and mutex maps
-	r.clients = make(map[string]*client.Client)
+	r.clients = make(map[string]ProviderClient)
 	r.clientMutex = make(map[string]*sync.Mutex)
 }

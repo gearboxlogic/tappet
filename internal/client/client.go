@@ -597,6 +597,11 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// CallTool invokes a tool through the downstream MCP client.
+func (c *Client) CallTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return c.client.CallTool(ctx, request)
+}
+
 // GetClient returns the underlying MCP client
 func (c *Client) GetClient() *client.Client {
 	return c.client
