@@ -442,7 +442,7 @@ For MCP 2026-07-28, account for:
 - JSON Schema 2020-12 behavior
 - official conformance tests
 
-Current code uses `mcp-go v0.43.2`. `mark3labs/mcp-go` merged 2026-07-28 support after that version. Upgrade and conformance work must be isolated from the capability model so SDK migration does not drive architecture.
+Current code uses `mcp-go v0.43.2`. `mark3labs/mcp-go` merged 2026-07-28 support after that version. [The upgrade decision](MCP_UPGRADE_DECISION.md) selects `v1.0.0-beta.1` for an isolated Milestone 1 compatibility and conformance pull request. Upgrade work must remain separate from the capability model so SDK migration does not drive architecture.
 
 Do not switch Go SDKs without a focused comparison. First test the current SDK line at a revision containing modern support.
 
