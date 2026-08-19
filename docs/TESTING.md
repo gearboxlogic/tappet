@@ -13,6 +13,10 @@ Milestone 0 removed every `.skip` file after reviewing its assertions.
 
 The active root-level `recursive_lazy_load_test.go` was also retired. It was not disabled, but it expected the same removed Serena and Playwright fixture while the repository ships the generated `everything` hierarchy. Its supported assertions now live in the package-level characterization tests.
 
+## External integration tests
+
+Routine `go test ./...` runs do not download or execute third-party MCP packages. `TestLazyLoadingPlaywright` runs only when `CAPSCOPE_PLAYWRIGHT_INTEGRATION=1` is set and invokes the exact package version `@playwright/mcp@0.0.79`. This test remains outside the hermetic CI baseline because it requires Node.js, npm registry access, and a browser-capable environment.
+
 ## Same-provider serialization
 
 CapScope retains the inherited per-provider mutex for this baseline. This is a transport compatibility rule, not a provider lifecycle design decision.

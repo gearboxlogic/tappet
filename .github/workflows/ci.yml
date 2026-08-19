@@ -30,5 +30,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Build shipped commands
-        run: make build
+      - name: Build release artifacts without publishing
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --snapshot --clean

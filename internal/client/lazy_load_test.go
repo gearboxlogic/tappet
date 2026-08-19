@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,8 +190,8 @@ func TestLazyLoadingFlow(t *testing.T) {
 
 // TestLazyLoadingPlaywright tests with Playwright server
 func TestLazyLoadingPlaywright(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
+	if os.Getenv("CAPSCOPE_PLAYWRIGHT_INTEGRATION") != "1" {
+		t.Skip("set CAPSCOPE_PLAYWRIGHT_INTEGRATION=1 to run the external Playwright integration test")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -212,7 +213,8 @@ func TestLazyLoadingPlaywright(t *testing.T) {
 				TransportType: config.MCPClientTypeStdio,
 				Command:       "npx",
 				Args: []string{
-					"@playwright/mcp@latest",
+					"--yes",
+					"@playwright/mcp@0.0.79",
 				},
 				Env: map[string]string{},
 				Options: &config.OptionsV2{
@@ -304,7 +306,7 @@ func TestLazyLoadingPlaywright(t *testing.T) {
 		// At least one should be playwright-related
 		hasPlaywrightTool := false
 		for _, name := range toolNames {
-			if assert.Contains(t, name, "playwright") {
+			if strings.Contains(name, "playwright") {
 				hasPlaywrightTool = true
 				break
 			}

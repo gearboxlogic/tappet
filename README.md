@@ -24,6 +24,8 @@ build/capscope
 build/capscope-structure-generator
 ```
 
+Both commands are shipped in release archives. The structure generator remains a supported companion command because the current broker loads its hierarchy from generated JSON.
+
 Generate a hierarchy from the providers in `config.json`:
 
 ```bash
