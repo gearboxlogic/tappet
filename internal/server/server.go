@@ -75,41 +75,35 @@ func recoverMiddleware(prefix string) MiddlewareFunc {
 	}
 }
 
-// StartStdioServer starts the stdio server with the given configuration
-func StartStdioServer(cfg *config.Config) error {
-	// Load hierarchy from filesystem
-	log.Printf("Loading hierarchy from %s", cfg.McpProxy.HierarchyPath)
-	h, err := hierarchy.LoadHierarchy(cfg.McpProxy.HierarchyPath)
-	if err != nil {
-		return fmt.Errorf("failed to load hierarchy: %w", err)
+// ServerDependencies are the runtime objects shared by every CapScope transport.
+type ServerDependencies struct {
+	Hierarchy  *hierarchy.Hierarchy
+	Registry   *hierarchy.ServerRegistry
+	Name       string
+	Version    string
+	LogEnabled bool
+}
+
+// NewCapScopeServer constructs the transport-independent outward MCP server.
+func NewCapScopeServer(deps ServerDependencies) (*server.MCPServer, error) {
+	if deps.Hierarchy == nil {
+		return nil, errors.New("hierarchy is required")
+	}
+	if deps.Registry == nil {
+		return nil, errors.New("server registry is required")
 	}
 
-	// Create server registry for lazy-loaded MCP clients
-	registry := hierarchy.NewServerRegistry(cfg.McpServers)
-	defer registry.Close()
-
-	// Create ONE MCP server with 2 meta-tools
 	serverOpts := []server.ServerOption{
 		server.WithResourceCapabilities(true, true),
 		server.WithRecovery(),
 	}
-
-	if cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false) {
+	if deps.LogEnabled {
 		serverOpts = append(serverOpts, server.WithLogging())
 	}
 
-	mcpServer := server.NewMCPServer(
-		cfg.McpProxy.Name,
-		cfg.McpProxy.Version,
-		serverOpts...,
-	)
-
-	// Register get_tools_in_category meta-tool
-	// Build description from root overview
+	mcpServer := server.NewMCPServer(deps.Name, deps.Version, serverOpts...)
 	description := "You have MCP tools hidden within categories. You MUST use get_tools_in_category to learn more about what available tools you have within these categories. Returns children categories, and tools at the specified path. Call initially with an empty string to get root categories."
-
-	// Get root node and use its overview
-	if rootNode := h.GetRootNode(); rootNode != nil && rootNode.Overview != "" {
+	if rootNode := deps.Hierarchy.GetRootNode(); rootNode != nil && rootNode.Overview != "" {
 		description += fmt.Sprintf("\n\n%s", rootNode.Overview)
 	}
 
@@ -127,35 +121,25 @@ func StartStdioServer(cfg *config.Config) error {
 			Required: []string{"path"},
 		},
 	}
-
 	mcpServer.AddTool(getToolsInCategoryTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		path := ""
-		if request.Params.Arguments != nil {
-			if argsMap, ok := request.Params.Arguments.(map[string]interface{}); ok {
-				if pathVal, ok := argsMap["path"].(string); ok {
-					path = pathVal
-				}
+		if argsMap, ok := request.Params.Arguments.(map[string]interface{}); ok {
+			if pathVal, ok := argsMap["path"].(string); ok {
+				path = pathVal
 			}
 		}
 
-		response, err := h.HandleGetToolsInCategory(path)
+		response, err := deps.Hierarchy.HandleGetToolsInCategory(path)
 		if err != nil {
 			return nil, err
 		}
-
 		jsonBytes, err := json.MarshalIndent(response, "", "  ")
 		if err != nil {
 			return nil, err
 		}
-
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.NewTextContent(string(jsonBytes)),
-			},
-		}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{mcp.NewTextContent(string(jsonBytes))}}, nil
 	})
 
-	// Register execute_tool meta-tool
 	executeToolTool := mcp.Tool{
 		Name:        "execute_tool",
 		Description: "Execute a tool by its full path. Automatically proxies the request to the appropriate MCP server.",
@@ -175,31 +159,56 @@ func StartStdioServer(cfg *config.Config) error {
 			Required: []string{"tool_path", "arguments"},
 		},
 	}
-
 	mcpServer.AddTool(executeToolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		toolPath := ""
 		arguments := make(map[string]interface{})
-
-		if request.Params.Arguments != nil {
-			if argsMap, ok := request.Params.Arguments.(map[string]interface{}); ok {
-				if pathVal, ok := argsMap["tool_path"].(string); ok {
-					toolPath = pathVal
-				}
-				if argsVal, ok := argsMap["arguments"].(map[string]interface{}); ok {
-					arguments = argsVal
-				}
+		if argsMap, ok := request.Params.Arguments.(map[string]interface{}); ok {
+			if pathVal, ok := argsMap["tool_path"].(string); ok {
+				toolPath = pathVal
+			}
+			if argsVal, ok := argsMap["arguments"].(map[string]interface{}); ok {
+				arguments = argsVal
 			}
 		}
-
 		if toolPath == "" {
-			return nil, fmt.Errorf("tool_path is required")
+			return nil, errors.New("tool_path is required")
 		}
-
-		return h.HandleExecuteTool(ctx, registry, toolPath, arguments)
+		return deps.Hierarchy.HandleExecuteTool(ctx, deps.Registry, toolPath, arguments)
 	})
 
-	// Serve via stdio
-	log.Printf("Starting hierarchical MCP proxy (stdio server)")
+	return mcpServer, nil
+}
+
+func loadServer(cfg *config.Config) (*server.MCPServer, *hierarchy.ServerRegistry, error) {
+	log.Printf("Loading hierarchy from %s", cfg.McpProxy.HierarchyPath)
+	h, err := hierarchy.LoadHierarchy(cfg.McpProxy.HierarchyPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load hierarchy: %w", err)
+	}
+	registry := hierarchy.NewServerRegistry(cfg.McpServers)
+	logEnabled := cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false)
+	mcpServer, err := NewCapScopeServer(ServerDependencies{
+		Hierarchy:  h,
+		Registry:   registry,
+		Name:       cfg.McpProxy.Name,
+		Version:    cfg.McpProxy.Version,
+		LogEnabled: logEnabled,
+	})
+	if err != nil {
+		registry.Close()
+		return nil, nil, err
+	}
+	return mcpServer, registry, nil
+}
+
+// StartStdioServer starts the stdio server with the given configuration
+func StartStdioServer(cfg *config.Config) error {
+	mcpServer, registry, err := loadServer(cfg)
+	if err != nil {
+		return err
+	}
+	defer registry.Close()
+	log.Printf("Starting CapScope (stdio server)")
 	return server.ServeStdio(mcpServer)
 }
 
@@ -208,126 +217,11 @@ func StartHTTPServer(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Load hierarchy from filesystem
-	log.Printf("Loading hierarchy from %s", cfg.McpProxy.HierarchyPath)
-	h, err := hierarchy.LoadHierarchy(cfg.McpProxy.HierarchyPath)
+	mcpServer, registry, err := loadServer(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to load hierarchy: %w", err)
+		return err
 	}
-
-	// Create server registry for lazy-loaded MCP clients
-	registry := hierarchy.NewServerRegistry(cfg.McpServers)
 	defer registry.Close()
-
-	// Create ONE MCP server with 2 meta-tools
-	serverOpts := []server.ServerOption{
-		server.WithResourceCapabilities(true, true),
-		server.WithRecovery(),
-	}
-
-	if cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false) {
-		serverOpts = append(serverOpts, server.WithLogging())
-	}
-
-	mcpServer := server.NewMCPServer(
-		cfg.McpProxy.Name,
-		cfg.McpProxy.Version,
-		serverOpts...,
-	)
-
-	// Register get_tools_in_category meta-tool
-	// Build description from root overview
-	description := "You have MCP tools hidden within categories. You MUST use get_tools_in_category to learn more about what available tools you have within these categories. Returns children categories, and tools at the specified path. Call initially with an empty string to get root categories."
-
-	// Get root node and use its overview
-	if rootNode := h.GetRootNode(); rootNode != nil && rootNode.Overview != "" {
-		description += fmt.Sprintf("\n\n%s", rootNode.Overview)
-	}
-
-	getToolsInCategoryTool := mcp.Tool{
-		Name:        "get_tools_in_category",
-		Description: description,
-		InputSchema: mcp.ToolInputSchema{
-			Type: "object",
-			Properties: map[string]interface{}{
-				"path": map[string]interface{}{
-					"type":        "string",
-					"description": "Category path using dot notation (e.g., 'coding_tools' or 'coding_tools.serena.search'). Use empty string or '/' for root.",
-				},
-			},
-			Required: []string{"path"},
-		},
-	}
-
-	mcpServer.AddTool(getToolsInCategoryTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		path := ""
-		if request.Params.Arguments != nil {
-			if argsMap, ok := request.Params.Arguments.(map[string]interface{}); ok {
-				if pathVal, ok := argsMap["path"].(string); ok {
-					path = pathVal
-				}
-			}
-		}
-
-		response, err := h.HandleGetToolsInCategory(path)
-		if err != nil {
-			return nil, err
-		}
-
-		jsonBytes, err := json.MarshalIndent(response, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.NewTextContent(string(jsonBytes)),
-			},
-		}, nil
-	})
-
-	// Register execute_tool meta-tool
-	executeToolTool := mcp.Tool{
-		Name:        "execute_tool",
-		Description: "Execute a tool by its full path. Automatically proxies the request to the appropriate MCP server.",
-		InputSchema: mcp.ToolInputSchema{
-			Type: "object",
-			Properties: map[string]interface{}{
-				"tool_path": map[string]interface{}{
-					"type":        "string",
-					"description": "Full tool path using dot notation (e.g., 'coding_tools.serena.search.search_symbol') or just tool name if unique",
-				},
-				"arguments": map[string]interface{}{
-					"type":                 "object",
-					"description":          "Arguments to pass to the tool",
-					"additionalProperties": true,
-				},
-			},
-			Required: []string{"tool_path", "arguments"},
-		},
-	}
-
-	mcpServer.AddTool(executeToolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		toolPath := ""
-		arguments := make(map[string]interface{})
-
-		if request.Params.Arguments != nil {
-			if argsMap, ok := request.Params.Arguments.(map[string]interface{}); ok {
-				if pathVal, ok := argsMap["tool_path"].(string); ok {
-					toolPath = pathVal
-				}
-				if argsVal, ok := argsMap["arguments"].(map[string]interface{}); ok {
-					arguments = argsVal
-				}
-			}
-		}
-
-		if toolPath == "" {
-			return nil, fmt.Errorf("tool_path is required")
-		}
-
-		return h.HandleExecuteTool(ctx, registry, toolPath, arguments)
-	})
 
 	// Set up HTTP handler (SSE or Streamable)
 	var handler http.Handler
@@ -349,9 +243,9 @@ func StartHTTPServer(cfg *config.Config) error {
 
 	// Apply middleware
 	middlewares := make([]MiddlewareFunc, 0)
-	middlewares = append(middlewares, recoverMiddleware("mcp-proxy"))
+	middlewares = append(middlewares, recoverMiddleware("capscope"))
 	if cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false) {
-		middlewares = append(middlewares, loggerMiddleware("mcp-proxy"))
+		middlewares = append(middlewares, loggerMiddleware("capscope"))
 	}
 	if cfg.McpProxy.Options != nil && len(cfg.McpProxy.Options.AuthTokens) > 0 {
 		middlewares = append(middlewares, newAuthMiddleware(cfg.McpProxy.Options.AuthTokens))
@@ -368,7 +262,7 @@ func StartHTTPServer(cfg *config.Config) error {
 	}
 
 	go func() {
-		log.Printf("Starting hierarchical MCP proxy (%s server)", cfg.McpProxy.Type)
+		log.Printf("Starting CapScope (%s server)", cfg.McpProxy.Type)
 		log.Printf("%s server listening on %s", cfg.McpProxy.Type, cfg.McpProxy.Addr)
 		hErr := httpServer.ListenAndServe()
 		if hErr != nil && !errors.Is(hErr, http.ErrServerClosed) {
