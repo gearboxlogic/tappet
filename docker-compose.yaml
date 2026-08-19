@@ -1,6 +1,6 @@
 services:
-  app:
-    image: ghcr.io/tbxark/mcp-proxy:latest
+  capscope:
+    image: ghcr.io/gearboxlogic/capscope:latest
     pull_policy: always
     volumes:
       - ./config.json:/config/config.json
@@ -20,8 +20,8 @@ services:
 #      - ./config.json:/config/config.json
 #    command: ["caddy", "file-server", "--root", "/config"]
 #
-#  app:
-#    image: ghcr.io/tbxark/mcp-proxy:latest
+#  capscope:
+#    image: ghcr.io/gearboxlogic/capscope:latest
 #    pull_policy: always
 #    ports:
 #      - "9090:9090"

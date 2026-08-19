@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	generator "github.com/gearboxlogic/capscope/structure_generator"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-	generator "github.com/voicetreelab/lazy-mcp/structure_generator"
 )
 
 type arrayFlags []string
@@ -206,8 +206,8 @@ func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig)
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "structure-generator",
-		Version: "1.0.0",
+		Name:    "capscope-structure-generator",
+		Version: "0.1.0",
 	}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 

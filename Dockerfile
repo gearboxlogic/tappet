@@ -1,4 +1,4 @@
-FROM golang:1.23 AS builder
+FROM golang:1.24 AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -16,6 +16,6 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     ln -s /usr/local/bin/node /usr/local/bin/nodejs
 
-COPY --from=builder /app/build/mcp-proxy /main
-ENTRYPOINT ["/main"]
+COPY --from=builder /app/build/capscope /usr/local/bin/capscope
+ENTRYPOINT ["/usr/local/bin/capscope"]
 CMD ["--config", "/config/config.json"]

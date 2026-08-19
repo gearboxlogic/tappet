@@ -88,7 +88,7 @@ func Regenerate(outputDir string) error {
 	// Create overview text in the format: "Root: N servers, M tools; server1 -> desc1, server2 -> desc2"
 	var overview string
 	if len(childSummaries) == 0 {
-		overview = "MCP Proxy - Hierarchical tool organization system. Use get_tools_in_category to explore available categories and execute_tool to run tools."
+		overview = "CapScope hierarchical tool index. Use get_tools_in_category to explore categories and execute_tool to run tools."
 	} else {
 		overview = fmt.Sprintf("Root: %d servers, %d tools; %s",
 			len(childSummaries), totalTools, joinWithCommas(childSummaries))
@@ -436,7 +436,7 @@ func generateToolFile(tool Tool, parentDir string, serverName string) error {
 			tool.Name: {
 				Title:        tool.Title,
 				Description:  tool.Description,
-				MapsTo:       tool.Name, // Maps to the actual MCP tool name
+				MapsTo:       tool.Name,  // Maps to the actual MCP tool name
 				Server:       serverName, // The MCP server that provides this tool
 				InputSchema:  tool.InputSchema,
 				OutputSchema: tool.OutputSchema,

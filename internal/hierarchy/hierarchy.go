@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gearboxlogic/capscope/internal/client"
+	"github.com/gearboxlogic/capscope/internal/config"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/voicetreelab/lazy-mcp/internal/client"
-	"github.com/voicetreelab/lazy-mcp/internal/config"
 )
 
 // HierarchyNode represents a node in the tool hierarchy

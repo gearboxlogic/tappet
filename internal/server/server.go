@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/voicetreelab/lazy-mcp/internal/config"
-	"github.com/voicetreelab/lazy-mcp/internal/hierarchy"
+	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/capscope/internal/hierarchy"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/voicetreelab/lazy-mcp/internal/config"
+	"github.com/gearboxlogic/capscope/internal/config"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -217,12 +217,12 @@ func (c *Client) activateTools(ctx context.Context, request mcp.CallToolRequest)
 
 	// Return success response
 	response := map[string]interface{}{
-		"activated":      true,
-		"server":         c.name,
-		"toolCount":      toolCount,
-		"promptCount":    promptCount,
-		"resourceCount":  resourceCount,
-		"templateCount":  templateCount,
+		"activated":     true,
+		"server":        c.name,
+		"toolCount":     toolCount,
+		"promptCount":   promptCount,
+		"resourceCount": resourceCount,
+		"templateCount": templateCount,
 	}
 
 	jsonBytes, err := json.Marshal(response)

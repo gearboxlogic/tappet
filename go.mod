@@ -1,4 +1,4 @@
-module github.com/voicetreelab/lazy-mcp
+module github.com/gearboxlogic/capscope
 
 go 1.24.0
 

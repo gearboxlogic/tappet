@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# Token-based Confirmation Hook for lazy-mcp
+# Token-based confirmation hook for CapScope
 #
 # This hook implements a two-phase confirmation:
 # 1. First call: No token exists → Deny with details (AI shows user)
 # 2. User confirms → AI creates token file
 # 3. Second call: Token exists + valid → Allow and delete token
 #
-# Token file: /tmp/lazy-mcp-confirm-<toolpath-hash>
+# Token file: /tmp/capscope-confirm-<toolpath-hash>
 # Token validity: 60 seconds (prevents stale confirmations)
 #
 # Usage in config-agentic.json:
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-TOKEN_DIR="/tmp/lazy-mcp-tokens"
+TOKEN_DIR="/tmp/capscope-tokens"
 TOKEN_MAX_AGE=60  # seconds
 
 # Ensure token directory exists

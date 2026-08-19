@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/voicetreelab/lazy-mcp/internal/config"
 	"github.com/TBXark/optional-go"
+	"github.com/gearboxlogic/capscope/internal/config"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
@@ -43,7 +43,7 @@ func TestLazyLoadingFlow(t *testing.T) {
 		McpProxy: &config.MCPProxyConfigV2{
 			BaseURL: "http://localhost",
 			Addr:    ":0", // Use random port
-			Name:    "Test MCP Proxy",
+			Name:    "CapScope test server",
 			Version: "1.0.0",
 			Type:    config.MCPServerTypeStreamable,
 			Options: &config.OptionsV2{
@@ -200,7 +200,7 @@ func TestLazyLoadingPlaywright(t *testing.T) {
 		McpProxy: &config.MCPProxyConfigV2{
 			BaseURL: "http://localhost",
 			Addr:    ":0",
-			Name:    "Test MCP Proxy",
+			Name:    "CapScope test server",
 			Version: "1.0.0",
 			Type:    config.MCPServerTypeStreamable,
 			Options: &config.OptionsV2{

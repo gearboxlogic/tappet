@@ -1,67 +1,31 @@
 # Deployment
 
-## Prerequisites
-
-The router requires a hierarchy directory structure at `testdata/mcp_hierarchy/` (or custom path). Ensure this is available in your deployment environment.
+CapScope needs its JSON configuration and generated hierarchy at runtime. Downstream stdio provider commands must also exist in the image or host environment.
 
 ## Docker
 
-Run with config and hierarchy mounted:
-
 ```bash
-docker run -d \
+docker run --rm \
   -p 8080:8080 \
-  -v /path/to/config.json:/config/config.json \
-  -v /path/to/mcp_hierarchy:/app/testdata/mcp_hierarchy \
-  ghcr.io/tbxark/mcp-proxy:latest
+  -v "$PWD/config.json:/config/config.json:ro" \
+  -v "$PWD/testdata/mcp_hierarchy:/app/testdata/mcp_hierarchy:ro" \
+  ghcr.io/gearboxlogic/capscope:latest
 ```
 
-Or with remote config:
-
-```bash
-docker run -d -p 8080:8080 \
-  -v /path/to/mcp_hierarchy:/app/testdata/mcp_hierarchy \
-  ghcr.io/tbxark/mcp-proxy:latest \
-  --config https://example.com/config.json
-```
-
-The image includes `npx` and `uvx` for launching MCP servers.
+The repository image includes Node.js, `npx`, and `uvx` for configurations that launch those provider commands.
 
 ## Docker Compose
 
 ```yaml
 services:
-  mcp-router:
-    image: ghcr.io/tbxark/mcp-proxy:latest
-    pull_policy: always
+  capscope:
+    image: ghcr.io/gearboxlogic/capscope:latest
     volumes:
-      - ./config.json:/config/config.json
-      - ./mcp_hierarchy:/app/testdata/mcp_hierarchy
+      - ./config.json:/config/config.json:ro
+      - ./testdata/mcp_hierarchy:/app/testdata/mcp_hierarchy:ro
     ports:
       - "8080:8080"
-    restart: always
+    restart: unless-stopped
 ```
 
-## Security
-
-- Use `authTokens` for authentication
-- Set `logEnabled: true` for debugging
-- Ensure hierarchy JSON files are not writable at runtime
-- MCP servers inherit security context from the router process
-
-## Hierarchy Setup
-
-Your deployment must include the hierarchy directory structure:
-
-```
-mcp_hierarchy/
-├── root.json                 (defines meta-tools)
-├── coding_tools/
-│   ├── coding_tools.json
-│   └── serena/
-│       └── serena.json       (MCP server configs here)
-└── web_tools/
-    └── web_tools.json
-```
-
-See [CONFIGURATION.md](CONFIGURATION.md) for hierarchy format details.
+Use `authTokens` for outward HTTP authentication. That does not replace provider-side authorization. Keep hierarchy JSON read-only at runtime, and supply provider credentials through the environment rather than embedding them in hierarchy files.

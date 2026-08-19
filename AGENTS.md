@@ -17,7 +17,7 @@ CapScope is not a general agent framework.
 
 ## Current implementation status
 
-The repository currently contains the January 2026 `voicetreelab/lazy-mcp` implementation under a new repository location.
+The repository began from the January 2026 `voicetreelab/lazy-mcp` implementation and retains its two-tool broker behavior.
 
 Verified current behavior:
 
@@ -25,9 +25,11 @@ Verified current behavior:
 - tool hierarchy data is stored as generated JSON files
 - downstream MCP servers start lazily on first invocation
 - downstream clients remain open until CapScope exits
-- the module path, imports, CLI names, and most documentation still use `voicetreelab/lazy-mcp`
+- the module path is `github.com/gearboxlogic/capscope` and shipped binaries use CapScope names
 - the MCP dependency is `github.com/mark3labs/mcp-go v0.43.2`
 - downstream initialization uses the legacy MCP initialize handshake
+- stdio and HTTP transports share one outward server constructor
+- characterization and generator tests are active; obsolete `.skip` suites were retired with recorded dispositions
 - skills, capability manifests, catalog search, idle provider shutdown, and harness adapters do not yet exist
 
 Do not describe planned behavior as implemented behavior.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/voicetreelab/lazy-mcp/internal/config"
-	"github.com/voicetreelab/lazy-mcp/internal/server"
+	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/capscope/internal/server"
 )
 
 var BuildVersion = "dev"
