@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/gearboxlogic/capscope/internal/client"
+	"github.com/gearboxlogic/capscope/internal/config"
 	generator "github.com/gearboxlogic/capscope/structure_generator"
-	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -28,16 +30,23 @@ func (i *arrayFlags) Set(value string) error {
 
 // Config represents the MCP server configuration
 type Config struct {
-	MCPServers map[string]ServerConfig `json:"mcpServers"`
-	OutputDir  string                  `json:"outputDir,omitempty"`
+	MCPServers map[string]*config.MCPClientConfigV2 `json:"mcpServers"`
+	OutputDir  string                               `json:"outputDir,omitempty"`
 }
 
-// ServerConfig defines how to connect to an MCP server
-type ServerConfig struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env,omitempty"`
+type catalogClient interface {
+	Start(context.Context) error
+	Initialize(context.Context, mcp.InitializeRequest) (*mcp.InitializeResult, error)
+	ListToolsByPage(context.Context, mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+	Close() error
 }
+
+type catalogConnection struct {
+	client    catalogClient
+	needStart bool
+}
+
+type catalogClientFactory func(string, *config.MCPClientConfigV2) (catalogConnection, error)
 
 func main() {
 	var inputFiles arrayFlags
@@ -144,6 +153,12 @@ func main() {
 
 // fetchFromConfig loads config and fetches tools from all MCP servers
 func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return fetchFromConfigWithFactory(ctx, configPath, newCatalogConnection)
+}
+
+func fetchFromConfigWithFactory(ctx context.Context, configPath string, factory catalogClientFactory) ([]generator.ServerTools, error) {
 	// Read config file
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -155,20 +170,22 @@ func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	serverNames := make([]string, 0, len(config.MCPServers))
+	for serverName := range config.MCPServers {
+		serverNames = append(serverNames, serverName)
+	}
+	sort.Strings(serverNames)
 
-	var allServers []generator.ServerTools
+	allServers := make([]generator.ServerTools, 0, len(serverNames))
 
 	// Fetch from each server
-	for serverName, serverConfig := range config.MCPServers {
+	for _, serverName := range serverNames {
+		serverConfig := config.MCPServers[serverName]
 		log.Printf("Connecting to MCP server: %s", serverName)
 
-		serverTools, err := fetchToolsFromServer(ctx, serverName, serverConfig)
-
+		serverTools, err := fetchToolsFromServer(ctx, serverName, serverConfig, factory)
 		if err != nil {
-			log.Printf("⚠ Warning: Failed to fetch tools from %s: %v", serverName, err)
-			continue
+			return nil, fmt.Errorf("failed to fetch complete tool inventory from %s: %w", serverName, err)
 		}
 
 		allServers = append(allServers, serverTools)
@@ -179,28 +196,22 @@ func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
 }
 
 // fetchToolsFromServer connects to an MCP server and fetches all tools
-func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig) (generator.ServerTools, error) {
-	log.Printf("[%s] Creating stdio client: %s %v", name, config.Command, config.Args)
-
-	// Expand environment variables in args
-	expandedArgs := make([]string, len(config.Args))
-	for i, arg := range config.Args {
-		expandedArgs[i] = os.ExpandEnv(arg)
-	}
-
-	// Create MCP client
-	mcpClient, err := client.NewStdioMCPClient(config.Command, []string{}, expandedArgs...)
+func fetchToolsFromServer(ctx context.Context, name string, providerConfig *config.MCPClientConfigV2, factory catalogClientFactory) (generator.ServerTools, error) {
+	connection, err := factory(name, providerConfig)
 	if err != nil {
 		return generator.ServerTools{}, fmt.Errorf("failed to create client: %w", err)
 	}
-	// Note: We intentionally don't close the client here because stdio cleanup can hang.
-	// The process will terminate via os.Exit(0) in main(), which cleans up all resources.
+	defer closeCatalogClientAsync(name, connection.client)
 
 	log.Printf("[%s] Client created, initializing...", name)
 
-	// Create our own context with timeout (don't use the passed ctx)
-	localCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	localCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if connection.needStart {
+		if err := connection.client.Start(localCtx); err != nil {
+			return generator.ServerTools{}, fmt.Errorf("failed to start client: %w", err)
+		}
+	}
 
 	// Initialize connection
 	initRequest := mcp.InitializeRequest{}
@@ -211,7 +222,7 @@ func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig)
 	}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
-	if _, err := mcpClient.Initialize(localCtx, initRequest); err != nil {
+	if _, err := connection.client.Initialize(localCtx, initRequest); err != nil {
 		return generator.ServerTools{}, fmt.Errorf("failed to initialize: %w", err)
 	}
 
@@ -222,19 +233,22 @@ func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig)
 	toolsRequest := mcp.ListToolsRequest{}
 
 	log.Printf("[%s] Listing tools...", name)
-	toolsResult, err := mcpClient.ListTools(localCtx, toolsRequest)
-	if err != nil {
-		return generator.ServerTools{}, fmt.Errorf("failed to list tools: %w", err)
-	}
-
-	// Convert mcp.Tool to generator.Tool
-	for _, mcpTool := range toolsResult.Tools {
-		tool := generator.Tool{
-			Name:        mcpTool.Name,
-			Description: mcpTool.Description,
-			InputSchema: convertToolInputSchema(mcpTool.InputSchema),
+	for {
+		toolsResult, err := connection.client.ListToolsByPage(localCtx, toolsRequest)
+		if err != nil {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: %w", err)
 		}
-		allTools = append(allTools, tool)
+		for _, mcpTool := range toolsResult.Tools {
+			tool, err := convertTool(mcpTool)
+			if err != nil {
+				return generator.ServerTools{}, fmt.Errorf("failed to preserve metadata for tool %s: %w", mcpTool.Name, err)
+			}
+			allTools = append(allTools, tool)
+		}
+		if toolsResult.NextCursor == "" {
+			break
+		}
+		toolsRequest.Params.Cursor = toolsResult.NextCursor
 	}
 
 	return generator.ServerTools{
@@ -243,19 +257,47 @@ func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig)
 	}, nil
 }
 
-// convertToolInputSchema converts mcp.ToolInputSchema to map[string]interface{}
-func convertToolInputSchema(schema mcp.ToolInputSchema) map[string]interface{} {
-	result := make(map[string]interface{})
+func newCatalogConnection(name string, providerConfig *config.MCPClientConfigV2) (catalogConnection, error) {
+	mcpClient, err := client.NewMCPClient(name, providerConfig)
+	if err != nil {
+		return catalogConnection{}, err
+	}
+	return catalogConnection{
+		client:    mcpClient.GetClient(),
+		needStart: mcpClient.NeedManualStart(),
+	}, nil
+}
 
-	if schema.Type != "" {
-		result["type"] = schema.Type
-	}
-	if len(schema.Properties) > 0 {
-		result["properties"] = schema.Properties
-	}
-	if len(schema.Required) > 0 {
-		result["required"] = schema.Required
-	}
+func closeCatalogClientAsync(name string, catalog catalogClient) {
+	go func() {
+		if err := catalog.Close(); err != nil {
+			log.Printf("[%s] Failed to close catalog client: %v", name, err)
+		}
+	}()
+}
 
-	return result
+func convertTool(tool mcp.Tool) (generator.Tool, error) {
+	data, err := json.Marshal(tool)
+	if err != nil {
+		return generator.Tool{}, err
+	}
+	var fields struct {
+		Name         string                 `json:"name"`
+		Description  string                 `json:"description"`
+		InputSchema  map[string]interface{} `json:"inputSchema"`
+		OutputSchema map[string]interface{} `json:"outputSchema"`
+		Annotations  map[string]interface{} `json:"annotations"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return generator.Tool{}, err
+	}
+	title, _ := fields.Annotations["title"].(string)
+	return generator.Tool{
+		Name:         fields.Name,
+		Title:        title,
+		Description:  fields.Description,
+		InputSchema:  fields.InputSchema,
+		OutputSchema: fields.OutputSchema,
+		Annotations:  fields.Annotations,
+	}, nil
 }
