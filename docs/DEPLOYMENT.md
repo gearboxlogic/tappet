@@ -14,6 +14,10 @@ docker run --rm \
 
 The repository image includes Node.js, `npx`, and `uvx` for configurations that launch those provider commands.
 
+### Image publication
+
+The manual Docker publishing workflow publishes only to `ghcr.io/gearboxlogic/capscope`. Milestone 0 intentionally retired the inherited optional backup-registry path because CapScope has no documented or supported secondary registry. Restoring secondary publication requires a separate reviewed change with an immutable action pin and credentials scoped to that registry.
+
 ## Docker Compose
 
 ```yaml
