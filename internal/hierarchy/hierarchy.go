@@ -564,7 +564,7 @@ func newProviderClient(ctx context.Context, serverName string, cfg *config.MCPCl
 
 	if mcpClient.NeedManualStart() {
 		if err := mcpClient.GetClient().Start(ctx); err != nil {
-			_ = mcpClient.Close()
+			closeFailedProviderAsync(serverName, mcpClient)
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
 	}
@@ -575,7 +575,7 @@ func newProviderClient(ctx context.Context, serverName string, cfg *config.MCPCl
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
 	if _, err := mcpClient.GetClient().Initialize(ctx, initRequest); err != nil {
-		_ = mcpClient.Close()
+		closeFailedProviderAsync(serverName, mcpClient)
 		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
 
@@ -584,6 +584,17 @@ func newProviderClient(ctx context.Context, serverName string, cfg *config.MCPCl
 		go mcpClient.StartPingTask(ctx)
 	}
 	return mcpClient, nil
+}
+
+// closeFailedProviderAsync keeps mcp-go stdio cleanup from hiding the start or
+// initialize error. In v0.43.2, closing a failed stdio client can block while
+// waiting for its child process, so this error path must not wait for Close.
+func closeFailedProviderAsync(serverName string, provider ProviderClient) {
+	go func() {
+		if err := provider.Close(); err != nil {
+			log.Printf("Failed to close MCP client for provider %s after initialization failure: %v", serverName, err)
+		}
+	}()
 }
 
 // Close closes all clients in the registry

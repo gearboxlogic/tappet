@@ -76,6 +76,58 @@ func TestProviderLifecycleIsLazyAndReusable(t *testing.T) {
 	assert.Equal(t, []string{"start:provider-a", "initialize:provider-a", "call:actual_tool", "call:actual_tool", "close:provider-a"}, recorder.snapshot())
 }
 
+func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
+	closeStarted := make(chan struct{})
+	releaseClose := make(chan struct{})
+	closeDone := make(chan struct{})
+	failedProvider := &blockingCloseProvider{
+		closeStarted: closeStarted,
+		release:      releaseClose,
+		closeDone:    closeDone,
+	}
+	initializeErr := errors.New("initialize failed")
+	registry := newServerRegistry(characterizationConfigs(), func(_ context.Context, name string, _ *config.MCPClientConfigV2) (ProviderClient, error) {
+		if name == "provider-a" {
+			closeFailedProviderAsync(name, failedProvider)
+			return nil, initializeErr
+		}
+		return ProviderClientFunc(func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("ok"), nil
+		}), nil
+	})
+	defer registry.Close()
+
+	_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+	assert.ErrorIs(t, err, initializeErr)
+	require.Eventually(t, func() bool {
+		select {
+		case <-closeStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	loaded := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-b")
+		loaded <- err
+	}()
+	select {
+	case err := <-loaded:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("a hanging failed-provider cleanup blocked another provider load")
+	}
+
+	close(releaseClose)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("failed-provider cleanup did not finish after release")
+	}
+}
+
 func TestSameProviderCallsAreSerialized(t *testing.T) {
 	h := loadCharacterizationHierarchy(t)
 	tracker := newConcurrencyTracker()
@@ -231,6 +283,23 @@ func (f ProviderClientFunc) CallTool(ctx context.Context, request mcp.CallToolRe
 }
 
 func (ProviderClientFunc) Close() error { return nil }
+
+type blockingCloseProvider struct {
+	closeStarted chan struct{}
+	release      chan struct{}
+	closeDone    chan struct{}
+}
+
+func (*blockingCloseProvider) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return nil, errors.New("unexpected tool call")
+}
+
+func (p *blockingCloseProvider) Close() error {
+	close(p.closeStarted)
+	<-p.release
+	close(p.closeDone)
+	return nil
+}
 
 type lifecycleRecorder struct {
 	mu     sync.Mutex

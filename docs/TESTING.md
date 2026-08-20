@@ -28,3 +28,7 @@ At `mcp-go v0.43.2`, `client/transport/stdio.go` protects the response map but c
 - a canceled waiter remains blocked until the plain mutex is released, then returns an error that preserves `context.DeadlineExceeded`.
 
 Milestone 1 should recheck this rule against the selected SDK version and transport implementations. It should replace the plain mutex with context-aware admission only as a separately tested behavior change.
+
+## Failed provider initialization
+
+At `mcp-go v0.43.2`, closing a failed stdio client can block while waiting for its child process. CapScope returns the original start or initialize error and performs that cleanup asynchronously. `TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds a failed client's `Close` call open and verifies that another provider can still load.
