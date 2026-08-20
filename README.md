@@ -11,7 +11,7 @@ CapScope does not yet implement capability packages, Agent Skills loading, searc
 
 ## Build
 
-Go 1.24 or newer is required.
+Go 1.24 or newer is required. CI, release artifacts, and the container image use Go 1.24.13.
 
 ```bash
 make build

@@ -6,13 +6,15 @@ CapScope needs its JSON configuration and generated hierarchy at runtime. Downst
 
 ```bash
 docker run --rm \
-  -p 8080:8080 \
-  -v "$PWD/config.json:/config/config.json:ro" \
-  -v "$PWD/testdata/mcp_hierarchy:/app/testdata/mcp_hierarchy:ro" \
+  -p 9090:9090 \
+  -v "$PWD/config.docker.json:/config/config.json:ro" \
+  -v "$PWD/testdata/mcp_hierarchy:/config/hierarchy:ro" \
   ghcr.io/gearboxlogic/capscope:latest
 ```
 
-The repository image includes Node.js, `npx`, and `uvx` for configurations that launch those provider commands.
+The Docker-specific configuration starts a Streamable HTTP server on port `9090` and uses the absolute hierarchy path `/config/hierarchy`. The repository image includes Node.js, `npx`, and `uvx` for configurations that launch those provider commands.
+
+Run `make test-container` to build the image without publishing it, start a temporary container, and verify MCP initialization plus the two-tool outward contract. Set `CONTAINER_ENGINE=podman` to use Podman instead of Docker.
 
 ### Image publication
 
@@ -25,10 +27,10 @@ services:
   capscope:
     image: ghcr.io/gearboxlogic/capscope:latest
     volumes:
-      - ./config.json:/config/config.json:ro
-      - ./testdata/mcp_hierarchy:/app/testdata/mcp_hierarchy:ro
+      - ./config.docker.json:/config/config.json:ro
+      - ./testdata/mcp_hierarchy:/config/hierarchy:ro
     ports:
-      - "8080:8080"
+      - "9090:9090"
     restart: unless-stopped
 ```
 

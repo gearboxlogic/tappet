@@ -1,0 +1,27 @@
+{
+  "mcpProxy": {
+    "baseURL": "http://localhost:9090",
+    "addr": ":9090",
+    "name": "CapScope",
+    "version": "0.1.0",
+    "type": "streamable-http",
+    "hierarchyPath": "/config/hierarchy",
+    "options": {
+      "lazyLoad": true
+    }
+  },
+  "mcpServers": {
+    "everything": {
+      "transportType": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ],
+      "env": {},
+      "options": {
+        "lazyLoad": true
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@ BUILD_DIR := ./build
 BUILD := $(shell git rev-parse --short HEAD)@$(shell date +%s)
 LD_FLAGS := -ldflags "-X main.BuildVersion=$(BUILD)"
 GO_BUILD := CGO_ENABLED=0 go build $(LD_FLAGS)
+CONTAINER_ENGINE ?= docker
 
 .PHONY: build
 build:
@@ -41,3 +42,8 @@ check: fmt-check test test-race vet build
 .PHONY: build-image
 build-image:
 	docker buildx build --platform=linux/amd64,linux/arm64 -t ghcr.io/gearboxlogic/capscope:latest . --push --provenance=false
+
+.PHONY: test-container
+test-container:
+	$(CONTAINER_ENGINE) build -t capscope:smoke .
+	CONTAINER_ENGINE=$(CONTAINER_ENGINE) ./script/test-container.sh capscope:smoke

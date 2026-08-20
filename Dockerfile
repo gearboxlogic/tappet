@@ -1,4 +1,5 @@
-FROM golang:1.24 AS builder
+ARG GO_VERSION=1.24.13
+FROM golang:${GO_VERSION} AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -8,6 +9,8 @@ RUN make build
 FROM node:lts-bookworm-slim AS node
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+
+WORKDIR /app
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 #COPY --from=node /usr/local/include/node /usr/local/include/node

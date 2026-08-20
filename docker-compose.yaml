@@ -3,29 +3,8 @@ services:
     image: ghcr.io/gearboxlogic/capscope:latest
     pull_policy: always
     volumes:
-      - ./config.json:/config/config.json
+      - ./config.docker.json:/config/config.json:ro
+      - ./testdata/mcp_hierarchy:/config/hierarchy:ro
     ports:
       - "9090:9090"
-    restart: always
-
-
-# If you don't want to directly mount the configuration file to the app container, you can use the following configuration.
-#
-#  caddy:
-#    image: caddy:latest
-#    pull_policy: always
-#    expose:
-#      - "80"
-#    volumes:
-#      - ./config.json:/config/config.json
-#    command: ["caddy", "file-server", "--root", "/config"]
-#
-#  capscope:
-#    image: ghcr.io/gearboxlogic/capscope:latest
-#    pull_policy: always
-#    ports:
-#      - "9090:9090"
-#    restart: always
-#    depends_on:
-#      - caddy
-#    command: [ "--config", "http://caddy/config.json" ]
+    restart: unless-stopped

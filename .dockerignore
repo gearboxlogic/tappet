@@ -1,6 +1,7 @@
 .idea
 .github
 build
+dist
 docs
 .gitattributes
 .golangci.yml

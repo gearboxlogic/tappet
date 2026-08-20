@@ -14,7 +14,7 @@ The upgrade is not needed for characterization, rebranding, common server constr
 
 ## Minimum Go toolchain gate
 
-The selected tag's [`go.mod`](https://github.com/mark3labs/mcp-go/blob/v1.0.0-beta.1/go.mod) declares Go `1.25.5`. CapScope currently declares Go `1.24.0`; CI selects that version from `go.mod` and the Docker builder uses the Go 1.24 image line. Adopting this SDK tag therefore also requires an explicit minimum-toolchain change. It is not only an SDK or protocol compatibility update.
+The selected tag's [`go.mod`](https://github.com/mark3labs/mcp-go/blob/v1.0.0-beta.1/go.mod) declares Go `1.25.5`. CapScope currently declares Go `1.24.0` as its minimum language version, while CI, release artifacts, and the Docker builder use Go `1.24.13`. Adopting this SDK tag therefore also requires an explicit minimum-toolchain change. It is not only an SDK or protocol compatibility update.
 
 Before accepting the beta dependency for production, Milestone 1 must decide whether to:
 
