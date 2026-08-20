@@ -5,10 +5,7 @@
     "name": "CapScope",
     "version": "0.1.0",
     "type": "streamable-http",
-    "hierarchyPath": "/config/hierarchy",
-    "options": {
-      "lazyLoad": true
-    }
+    "hierarchyPath": "/config/hierarchy"
   },
   "mcpServers": {
     "everything": {
@@ -18,10 +15,7 @@
         "-y",
         "@modelcontextprotocol/server-everything"
       ],
-      "env": {},
-      "options": {
-        "lazyLoad": true
-      }
+      "env": {}
     }
   }
 }

@@ -13,9 +13,11 @@ Milestone 0 removed every `.skip` file after reviewing its assertions.
 
 The active root-level `recursive_lazy_load_test.go` was also retired. It was not disabled, but it expected the same removed Serena and Playwright fixture while the repository ships the generated `everything` hierarchy. Its supported assertions now live in the package-level characterization tests.
 
-## External integration tests
+The active `internal/client/lazy_load_test.go` suite and its provider-level `activate_<provider>` implementation were also retired. That internal path was not used by either shipped command, overlapped with the recursive hierarchy broker, and depended on external Serena and Playwright processes. The current `internal/client` package now only adapts downstream transports for `ServerRegistry`; hierarchy lifecycle tests cover the shipped lazy-start path.
 
-Routine `go test ./...` runs do not download or execute third-party MCP packages. `TestLazyLoadingPlaywright` runs only when `CAPSCOPE_PLAYWRIGHT_INTEGRATION=1` is set and invokes the exact package version `@playwright/mcp@0.0.79`. This test remains outside the hermetic CI baseline because it requires Node.js, npm registry access, and a browser-capable environment.
+## Hermetic integration tests
+
+Routine `go test ./...` runs do not download or execute third-party MCP packages. The structure-generator config test launches the repository's test binary as a local stdio MCP fixture. The downstream SSE lifecycle test uses an in-process MCP server. These tests cover provider environment propagation and request-independent provider lifetime without external installations.
 
 ## Same-provider serialization
 

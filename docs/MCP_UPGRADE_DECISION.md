@@ -25,7 +25,7 @@ The `mcp-go` beta remains the first experiment because it is the first tag conta
 
 ## Current behavior
 
-CapScope calls `Initialize` explicitly in `internal/hierarchy.newProviderClient`, `internal/client.Client.AddToMCPServer`, and `structure_generator/cmd.fetchToolsFromServer`. With `mcp-go v0.43.2`, those calls use the legacy initialize handshake and protocol-session behavior. The outward server uses the same dependency for stdio, SSE, and Streamable HTTP.
+CapScope calls `Initialize` explicitly in `internal/hierarchy.newProviderClient` and `structure_generator/cmd.fetchToolsFromServer`. With `mcp-go v0.43.2`, those calls use the legacy initialize handshake and protocol-session behavior. The outward server uses the same dependency for stdio, SSE, and Streamable HTTP.
 
 ## Negotiation in the target
 

@@ -5,10 +5,7 @@
     "name": "CapScope",
     "version": "0.1.0",
     "type": "stdio",
-    "hierarchyPath": "testdata/mcp_hierarchy",
-    "options": {
-      "lazyLoad": true
-    }
+    "hierarchyPath": "testdata/mcp_hierarchy"
   },
   "mcpServers": {
     "serena": {
@@ -20,10 +17,7 @@
         "--context",
         "claude-code"
       ],
-      "env": {},
-      "options": {
-        "lazyLoad": true
-      }
+      "env": {}
     },
     "github": {
       "transportType": "stdio",
@@ -34,9 +28,6 @@
       ],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      },
-      "options": {
-        "lazyLoad": true
       }
     },
     "filesystem": {
@@ -48,10 +39,7 @@
         "${HOME}/repos",
         "${HOME}/Documents"
       ],
-      "env": {},
-      "options": {
-        "lazyLoad": true
-      }
+      "env": {}
     },
     "everything": {
       "transportType": "stdio",
@@ -60,10 +48,7 @@
         "-y",
         "@modelcontextprotocol/server-everything"
       ],
-      "env": {},
-      "options": {
-        "lazyLoad": true
-      }
+      "env": {}
     }
   }
 }

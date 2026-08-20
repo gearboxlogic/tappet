@@ -25,6 +25,7 @@ Verified current behavior:
 - tool hierarchy data is stored as generated JSON files
 - downstream MCP servers start lazily on first invocation
 - downstream clients remain open until CapScope exits
+- the unused provider-level `activate_<provider>` lazy-loading path has been retired; the shipped recursive hierarchy broker is the only lazy invocation path
 - the module path is `github.com/gearboxlogic/capscope` and shipped binaries use CapScope names
 - the MCP dependency is `github.com/mark3labs/mcp-go v0.43.2`
 - downstream initialization uses the legacy MCP initialize handshake
