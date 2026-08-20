@@ -7,6 +7,7 @@
 -expand-env            expand environment variables (default true)
 -http-headers string   headers for a remote config URL
 -http-timeout int      remote config timeout in seconds (default 10)
+-hierarchy string      path to hierarchy directory (overrides config)
 -insecure              skip TLS verification for remote config
 -port string           override the configured HTTP port
 -version               print version and exit
@@ -44,7 +45,7 @@ Input:
 
 CapScope resolves the exact path, starts and initializes the mapped provider if needed, calls the mapped downstream tool, and returns its MCP result. It reuses that provider until shutdown.
 
-Calls to one provider are serialized. Calls to different providers may overlap. Each invocation has a 30-second deadline that includes time spent waiting for the same-provider lock.
+Calls to one provider are serialized. Calls to different providers may overlap. Each invocation has a 30-second deadline covering lazy provider startup, initialization, time spent waiting for the same-provider lock, and the downstream call. A provider's connection and ping task use a separate registry lifecycle context, so canceling the request that first starts an SSE provider does not terminate the cached provider.
 
 When a downstream call returns an error and the generated hierarchy contains an input schema, CapScope appends that schema as a diagnostic. An MCP result with `isError: true` remains an MCP result, and structured content is preserved.
 

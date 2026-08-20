@@ -410,8 +410,13 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 		return nil, fmt.Errorf("no MCP server configured for tool: %s", toolPath)
 	}
 
+	// Bound the complete invocation, including lazy provider startup,
+	// initialization, same-provider queuing, and the downstream call.
+	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Get or load the MCP client for this server
-	client, err := registry.GetOrLoadServer(ctx, serverName)
+	client, err := registry.GetOrLoadServer(toolCtx, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MCP client: %w", err)
 	}
@@ -423,13 +428,6 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	}
 
 	log.Printf("Executing tool: hierarchy_path=%s, server=%s, tool=%s", toolPath, serverName, actualToolName)
-
-	// Create a context with 30-second timeout for tool execution
-	// (increased from 15s to account for queuing time when serializing requests)
-	// Note: We create the timeout BEFORE acquiring the lock to enforce a total deadline
-	// for the operation. If we waited for the lock first, a client could hang indefinitely.
-	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 
 	// Serialize tool calls to the same server to prevent concurrent stdio access.
 	// Stdio is a single-channel transport that cannot handle interleaved messages.
@@ -476,6 +474,8 @@ type ServerRegistry struct {
 	clientMutex   map[string]*sync.Mutex // Per-client mutex for serializing tool calls
 	serverConfigs map[string]*config.MCPClientConfigV2
 	clientFactory ProviderClientFactory
+	lifecycleCtx  context.Context
+	cancel        context.CancelFunc
 	mu            sync.RWMutex
 }
 
@@ -490,15 +490,22 @@ type ProviderClientFactory func(context.Context, string, *config.MCPClientConfig
 
 // NewServerRegistry creates a new server registry with server configurations
 func NewServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2) *ServerRegistry {
-	return newServerRegistry(serverConfigs, newProviderClient)
+	registry := newServerRegistry(serverConfigs, nil)
+	registry.clientFactory = func(ctx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
+		return newProviderClient(ctx, registry.lifecycleCtx, serverName, cfg)
+	}
+	return registry
 }
 
 func newServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2, factory ProviderClientFactory) *ServerRegistry {
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &ServerRegistry{
 		clients:       make(map[string]ProviderClient),
 		clientMutex:   make(map[string]*sync.Mutex),
 		serverConfigs: serverConfigs,
 		clientFactory: factory,
+		lifecycleCtx:  lifecycleCtx,
+		cancel:        cancel,
 	}
 }
 
@@ -556,14 +563,14 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 	return mcpClient, nil
 }
 
-func newProviderClient(ctx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
+func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
 	mcpClient, err := client.NewMCPClient(serverName, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
 	if mcpClient.NeedManualStart() {
-		if err := mcpClient.GetClient().Start(ctx); err != nil {
+		if err := mcpClient.GetClient().Start(lifecycleCtx); err != nil {
 			closeFailedProviderAsync(serverName, mcpClient)
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
@@ -581,7 +588,7 @@ func newProviderClient(ctx context.Context, serverName string, cfg *config.MCPCl
 
 	log.Printf("Created and initialized MCP client for provider: %s", serverName)
 	if mcpClient.NeedPing() {
-		go mcpClient.StartPingTask(ctx)
+		go mcpClient.StartPingTask(lifecycleCtx)
 	}
 	return mcpClient, nil
 }
@@ -601,6 +608,7 @@ func closeFailedProviderAsync(serverName string, provider ProviderClient) {
 func (r *ServerRegistry) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.cancel()
 
 	for name, client := range r.clients {
 		log.Printf("Closing MCP client: %s", name)

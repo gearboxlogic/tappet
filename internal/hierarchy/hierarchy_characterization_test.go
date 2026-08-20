@@ -76,6 +76,54 @@ func TestProviderLifecycleIsLazyAndReusable(t *testing.T) {
 	assert.Equal(t, []string{"start:provider-a", "initialize:provider-a", "call:actual_tool", "call:actual_tool", "close:provider-a"}, recorder.snapshot())
 }
 
+func TestSSEProviderOutlivesTriggeringRequest(t *testing.T) {
+	downstream := mcpserver.NewMCPServer("sse-provider", "test")
+	downstream.AddTool(mcp.NewTool("actual_tool"), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
+	})
+	testServer := mcpserver.NewTestServer(downstream)
+	t.Cleanup(testServer.Close)
+
+	configs := characterizationConfigs()
+	configs["provider-a"] = &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeSSE,
+		URL:           testServer.URL + "/sse",
+	}
+	registry := NewServerRegistry(configs)
+	defer registry.Close()
+	h := loadCharacterizationHierarchy(t)
+
+	triggerCtx, cancelTrigger := context.WithCancel(context.Background())
+	result, err := h.HandleExecuteTool(triggerCtx, registry, "alpha.nested.public_tool", nil)
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	cancelTrigger()
+
+	// The triggering request's derived invocation context is canceled when the
+	// first call returns. Give the SSE receive loop time to observe cancellation
+	// before proving that the cached provider still serves another request.
+	time.Sleep(50 * time.Millisecond)
+	result, err = h.HandleExecuteTool(context.Background(), registry, "alpha.nested.public_tool", nil)
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+}
+
+func TestInvocationDeadlineIncludesProviderAcquisition(t *testing.T) {
+	h := loadCharacterizationHierarchy(t)
+	registry := newServerRegistry(characterizationConfigs(), func(ctx context.Context, _ string, _ *config.MCPClientConfigV2) (ProviderClient, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	defer registry.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := h.HandleExecuteTool(ctx, registry, "alpha.nested.public_tool", nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "failed to get MCP client")
+}
+
 func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
 	closeStarted := make(chan struct{})
 	releaseClose := make(chan struct{})
