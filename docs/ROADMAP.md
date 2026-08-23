@@ -107,6 +107,8 @@ Exit criteria:
   metadata or starting a provider
 - every accepted skill or reference artifact remains completely retrievable
   within response bounds
+- a bounded continuation handle keeps an accepted multi-chunk artifact read
+  available across a concurrent reinstall or uninstall
 - large capability structures remain completely retrievable across stable pages
 - deterministic results across runs
 
@@ -129,7 +131,8 @@ Work:
 - different-provider parallelism
 - explicit refresh
 - conservative cache invalidation
-- metadata and schema refresh before every post-connect invocation
+- metadata and schema refresh before every invocation unless the active
+  connection negotiated reliable tool-list change notifications
 - bounded inline output plus quota-limited lossless spill and chunked retrieval
 - lifecycle status and telemetry
 
@@ -142,6 +145,7 @@ Exit criteria:
 - first invoke starts only the selected provider
 - idle provider stops and reconnects on next invoke
 - reconnect refreshes schemas before invoke and stale arguments never reach the provider
+- an ambiguously delivered provider call is never replayed automatically
 - large output cannot silently consume unbounded model context or lose structured content
 - spill limits fail explicitly without exceeding per-result or aggregate quotas
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
@@ -191,6 +195,8 @@ Exit criteria:
 - structured result survives proxying
 - every returned resource link resolves through the scoped broker resource
   route without exposing unrelated provider resources
+- failed result publication releases staged resource capacity and preserves any
+  structured downstream resource-read error
 - results beat eager exposure on context size without unacceptable task-success loss
 
 ## Milestone 6: Scale and retrieval evaluation

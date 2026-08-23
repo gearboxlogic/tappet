@@ -324,18 +324,29 @@ published artifact reference.
 Install, reinstall, and uninstall update the durable installed-package registry
 as one atomic generation. A successful reinstall first commits and validates
 the new snapshot, then swaps the registry entry; the previous generation becomes
-unreachable to new `read` calls and its old artifact references return the typed
-stale-reference result. Uninstall removes the registry reference in the same
-way. A failed install never changes the active generation.
+unreachable to new initial `read` calls and its old artifact references return
+the typed stale-reference result. An explicit continuation handle issued before
+the swap remains bound to the old immutable snapshot until that handle is
+released or expires. Uninstall removes the registry reference in the same way.
+A failed install never changes the active generation.
 
 Snapshot objects are reference-counted by active registry generations and by
-short-lived read leases. Resolving an artifact reference and acquiring its read
-lease is atomic, and the lease remains held until that `read` response has
-finished using the opened snapshot object. Garbage collection may delete a
-superseded or uninstalled snapshot only after both its registry count and active
-read lease count reach zero; it never evicts an object promised to an in-flight
-reader. Identical content-addressed objects shared by active snapshots remain
-live until the final reference is released.
+explicit, bounded continuation-handle leases. Resolving an artifact reference,
+acquiring its snapshot lease, and issuing a continuation handle for an
+incomplete first response are atomic. Every later chunk uses that opaque handle
+rather than resolving the mutable registry again, so reinstall or uninstall
+cannot interrupt an accepted multi-call read. A handle lease is released on the
+final chunk, a five-minute idle timeout, or a one-hour absolute lifetime,
+whichever occurs first. Each successful non-final chunk renews the idle deadline
+without extending the absolute deadline, and each response reports the effective
+expiry. Counts of live handles and retained bytes have finite
+operator-configurable quotas, and admission failure returns a typed error before
+promising a continuation.
+Garbage collection may delete a superseded or uninstalled snapshot only after
+both its registry count and continuation-lease count reach zero. Identical
+content-addressed objects shared by active snapshots remain live until the
+final reference is released. Continuation handles are application handles, not
+implicit connection or MCP session state.
 
 Reinstall and uninstall schedule collection, and quota admission runs collection
 before rejecting a new snapshot. Startup removes abandoned temporary writes and

@@ -322,6 +322,19 @@ Package artifact references include the package version and content digest.
 Schema references include the provider fingerprint and schema digest; a cache
 refresh invalidates references whose digest changed.
 
+When the first artifact `read` is incomplete, it atomically acquires a lease on
+the resolved immutable snapshot and returns an opaque `continuation_ref` plus
+its `expires_at`. Every subsequent chunk passes that continuation reference as
+`ref`; it does not resolve the installed-package or metadata registry again.
+The lease survives reinstall, uninstall, and metadata refresh, and is released
+on the final chunk, a five-minute idle timeout, or a one-hour absolute lifetime.
+Each successful non-final chunk renews the idle deadline without extending the
+absolute deadline, and each response reports the effective expiry. Live-handle
+and retained-byte quotas bound this state, and admission fails before the first
+chunk is promised if a continuation cannot be reserved. These are explicit
+application handles independent of the broker transport or MCP protocol
+session.
+
 An inline `invoke` result keeps the downstream MCP result at the outer protocol
 level. CapScope forwards every provider content block in the outer
 `CallToolResult.Content`; text, image, audio, and embedded-resource blocks remain
@@ -496,11 +509,20 @@ link. Before publishing an invocation result containing such a block, CapScope
 uses that same initialized provider session to call downstream
 `resources/read`. It accepts at most 32 links per result, snapshots each complete
 typed resource response under finite per-resource and aggregate byte quotas,
-and reserves all snapshot capacity atomically before returning the tool result.
+and stages all snapshot capacity before returning the tool result.
 The block URI is then rewritten to an unguessable
 `capscope-resource://<opaque-handle>` URI. All other block fields remain
 unchanged, and the snapshot record retains the original provider URI, provider
 fingerprint, content digest, and invocation ID for diagnostics and stale checks.
+
+Resource snapshots, the fully adapted result encoding, and any required result
+or resource-error spill are one publication transaction. CapScope commits the
+resource handles and spill handle together only after every link has been
+materialized and the final bounded response, preservation error, or spill has
+been prepared. Any failure before that commit releases every staged snapshot,
+object slot, and byte reservation; no unreachable resource object remains
+charged against quota. A transport failure after commit cannot be rolled back
+safely, so the ordinary finite handle expiry reclaims those published objects.
 
 The outward broker advertises MCP resource support for a scoped
 `resources/read` route. Reading the rewritten URI returns the exact snapshotted
@@ -520,6 +542,14 @@ or a provider URI that the CapScope-connected harness cannot resolve. This
 scoped proxy does not expose a provider-wide resource catalog and does not add
 dynamic tools; implementing it belongs to the portable broker milestone, not
 Milestone 0.
+
+When downstream `resources/read` returns a structured JSON-RPC error, the
+preservation error retains the original numeric code, message, and structured
+data unchanged in a bounded `cause`. If that cause exceeds the inline limit,
+the ordinary lossless error-spill path in section 6.5.1 stores it and the cause
+contains the resulting opaque error reference. Local unsupported-resource and
+quota failures remain separately classified; they are never presented as a
+provider authorization error.
 
 ### 6.6 Provider manager
 
@@ -551,7 +581,19 @@ Only `lazy` is required for the first vertical slice. Idle timeout should be con
 
 Process lifecycle is separate from MCP protocol session state. A stateless MCP request model does not require restarting a stdio provider for each call.
 
-#### 6.6.1 Downstream transport frame limits
+#### 6.6.1 Ambiguous delivery and retry safety
+
+V1 never automatically retries a downstream `tools/call` after any request byte
+has been handed to the transport. A timeout, cancellation, connection loss, or
+frame failure after that point can mean the provider executed the operation but
+its result was lost. CapScope closes or repairs the connection for future work
+and returns a typed `provider_outcome_unknown` error containing bounded provider
+and invocation diagnostics; it does not replay the call. A call may be retried
+automatically only when failure is proven to have occurred before transmission.
+Any future post-transmission retry requires an explicit provider contract for
+idempotency and a replay token; capability packages do not imply either.
+
+#### 6.6.2 Downstream transport frame limits
 
 Every message received from a downstream provider has a finite pre-decode
 limit, regardless of method or direction of the JSON-RPC exchange. V1 permits
@@ -601,11 +643,19 @@ Cached schemas are snapshots. Search and describe responses sourced from a
 stopped provider must report the observation time, provider fingerprint, schema
 digest, and cached freshness state. Every provider connection or reconnection
 must refresh current metadata and schema digests before the first invocation is
-accepted, even when configuration and package bindings are unchanged. If the
-digest changed, CapScope atomically replaces the snapshot, invalidates old
-schema references, and validates arguments only against the refreshed schema.
-If refresh fails, invocation fails without calling the provider; stale metadata
-is never used as an invocation contract.
+accepted, even when configuration and package bindings are unchanged. On a
+long-lived connection, CapScope may reuse that invocation contract only when
+the provider advertised reliable tool-list change notifications on the active
+connection. The provider manager serializes notification handling with schema
+selection: a dirty notification before dispatch forces a bounded refresh and
+revalidation. Without that negotiated invalidation contract, CapScope performs
+a bounded metadata refresh immediately before every invocation, then validates
+arguments against that result. A provider that advertises notifications but
+changes schemas without sending them violates its negotiated contract; the
+reported freshness state records which mode was used. If a digest changed,
+CapScope atomically replaces the snapshot and invalidates old schema references.
+If refresh fails, invocation fails without calling the provider; known-stale
+metadata is never used as an invocation contract.
 
 Metadata ingestion is bounded independently of individual schemas. V1-alpha
 hard limits per provider refresh are 4 MiB per encoded list response, 128 list
@@ -686,17 +736,21 @@ Derived state must be rebuildable.
 - harness-native active projections
 - temporary output spill files
 - explicit handles for temporary spilled results
+- explicit continuation handles for multi-call artifact reads
 
 ### 7.4 Explicit application handles
 
-MCP 2026-07-28 removes protocol-level sessions. If CapScope later introduces a cross-call scope, lease, task, or activation, it must use an explicit application handle passed by the caller.
+MCP 2026-07-28 removes protocol-level sessions. Any cross-call scope, lease,
+task, or activation must use an explicit application handle passed by the
+caller. Spill references, resource handles, and artifact continuation handles
+follow this rule.
 
 Do not map an implicit client connection to hidden capability state.
 
 The first broker-mode vertical slice should remain stateless across CapScope
 calls except for provider lifecycle, cache lifecycle, and bounded temporary
-result retrieval through explicit result handles. Introduce activation handles
-only after a tested requirement demonstrates their value.
+retrieval through the explicit handles defined above. Introduce activation
+handles only after a tested requirement demonstrates their value.
 
 ## 8. Authorization boundary
 
@@ -876,7 +930,10 @@ Output: one operation schema, skill body, permitted reference resource, or
 bounded chunk of one of those artifacts. A complete artifact is returned inline
 only when it fits the response limit. Larger accepted artifacts use the same
 `offset`, `max_bytes`, base64 chunk, byte-count, and digest fields shown below,
-with their stable artifact reference instead of a temporary result reference.
+with their stable artifact reference on the first request. If the first chunk
+is incomplete, its response also returns `continuation_ref` and `expires_at`;
+every later chunk uses that continuation reference as `ref`, preserving the
+same immutable snapshot across reinstall, uninstall, or cache refresh.
 
 For an oversized invocation result or downstream JSON-RPC error, the same tool
 accepts the corresponding spill reference:
