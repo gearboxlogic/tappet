@@ -86,7 +86,7 @@ Work:
 - exact operation-schema selectors in `describe`
 - Agent Skill body reads
 - individual reference reads
-- output bounds
+- bounded chunk retrieval for schemas, skills, and references
 
 Initial benchmark corpus:
 
@@ -101,7 +101,8 @@ Exit criteria:
 - 100% exact-ID recall
 - agreed top-5 natural-language recall target on a versioned corpus
 - no unrelated full skill bodies or operation schemas in search output
-- `describe` returns full schemas only for explicitly selected operation IDs
+- `describe` returns schema content or an exact schema reference only for explicitly selected operation IDs
+- every accepted materialized artifact remains completely retrievable within response bounds
 - deterministic results across runs
 
 ## Milestone 4: Provider manager and metadata cache
@@ -120,7 +121,8 @@ Work:
 - different-provider parallelism
 - explicit refresh
 - conservative cache invalidation
-- bounded inline output plus lossless spill and chunked retrieval
+- metadata and schema refresh before every post-connect invocation
+- bounded inline output plus quota-limited lossless spill and chunked retrieval
 - lifecycle status and telemetry
 
 Exit criteria:
@@ -128,8 +130,9 @@ Exit criteria:
 - search and describe work from cache without starting providers
 - first invoke starts only the selected provider
 - idle provider stops and reconnects on next invoke
-- stale schemas are detected
+- reconnect refreshes schemas before invoke and stale arguments never reach the provider
 - large output cannot silently consume unbounded model context or lose structured content
+- spill limits fail explicitly without exceeding per-result or aggregate quotas
 
 ## Milestone 5: Portable broker vertical slice
 
