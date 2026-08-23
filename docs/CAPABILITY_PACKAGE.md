@@ -396,13 +396,17 @@ absolute deadline. Preparing the final chunk retains the immutable object and
 an exact, idempotent response for a fixed five-minute replay grace. Every prepared
 non-final chunk also has one exact replay record until the next request proves
 receipt and atomically replaces it, or the idle or absolute lease deadline
-passes. The first stable-reference request maps to the same lease and response
-on an exact retry, so loss of the response containing `continuation_ref` is
-recoverable. Replays never extend a deadline. Single-chunk reads receive the
-same protection if reinstall races delivery. Each response reports the
-effective expiry. Counts of live handles, replay records, and retained bytes
-have finite operator-configurable quotas, and admission failure returns a typed
-error before promising retrieval.
+passes. Every initial stable-reference request carries a caller-generated
+`attempt_id` with at least 128 bits of randomness. The authorized requester,
+stable reference, attempt ID, offset, and `max_bytes` map to the same lease and
+response on an exact retry, while independent readers use distinct attempt IDs
+and receive distinct leases. Loss of the response containing `continuation_ref`
+is therefore recoverable without making separate readers share advancement
+state. Replays never extend a deadline. Single-chunk reads receive the same
+protection if reinstall races delivery. Each response reports the effective
+expiry. Counts of live handles, replay records, and retained bytes have finite
+operator-configurable quotas, and admission failure returns a typed error before
+promising retrieval.
 Continuation advancement is serialized per lease and uses a monotonic
 generation compare-and-swap. At one expected offset, the first exact request
 tuple commits; an identical competitor receives its replay and a different
@@ -494,6 +498,16 @@ before constructing a node beyond either budget. V1 rejects anchors, aliases,
 and merge keys before alias resolution, and rejects duplicate mapping keys
 rather than ambiguously resolving them. Semantic decoding starts only after
 those syntax budgets pass.
+
+The V1-alpha manifest schema is closed. Semantic decoding rejects an
+unrecognized field at every mapping node, including the root, skills,
+operations, context references, provider bindings, and nested structures; it
+uses a known-fields decoder or equivalent generated validation rather than a
+permissive YAML-to-struct decode. Versioned additions require an explicit
+schema change. A misspelled field or attempted inline credential such as
+provider `token` rejects the complete staged package, and the rejected manifest
+bytes are deleted with the other private staging objects rather than committed
+to an immutable snapshot.
 
 Field byte limits are normalized UTF-8 bytes; item and aggregate limits use the
 canonical encoded JSON representation. These limits cover material returned by
