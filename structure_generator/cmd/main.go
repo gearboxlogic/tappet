@@ -435,6 +435,9 @@ func convertTool(data json.RawMessage) (generator.Tool, error) {
 	if err := decoder.Decode(&fields); err != nil {
 		return generator.Tool{}, err
 	}
+	if fields.InputSchema == nil {
+		return generator.Tool{}, fmt.Errorf("tool %q is missing required object inputSchema", fields.Name)
+	}
 	title := fields.Title
 	if title == "" {
 		title, _ = fields.Annotations["title"].(string)

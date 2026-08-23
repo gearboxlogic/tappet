@@ -315,6 +315,22 @@ func TestConvertToolPreservesSchemaNumbersAndTopLevelTitle(t *testing.T) {
 	assert.Contains(t, string(encoded), `"minimum":-9007199254740993`)
 }
 
+func TestConvertToolRejectsMissingInputSchema(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		tool string
+	}{
+		{name: "missing", tool: `{"name":"broken_tool"}`},
+		{name: "null", tool: `{"name":"broken_tool","inputSchema":null}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := convertTool(json.RawMessage(testCase.tool))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `tool "broken_tool" is missing required object inputSchema`)
+		})
+	}
+}
+
 func TestGeneratorStdioProvider(t *testing.T) {
 	if os.Getenv("TAPPET_GENERATOR_FIXTURE") != "enabled" {
 		return

@@ -206,11 +206,20 @@ func isReservedWindowsDeviceName(name string) bool {
 	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
 		return true
 	}
-	if len(upperName) != 4 {
+	nameRunes := []rune(upperName)
+	if len(nameRunes) != 4 {
 		return false
 	}
-	prefix := upperName[:3]
-	return (prefix == "COM" || prefix == "LPT") && upperName[3] >= '1' && upperName[3] <= '9'
+	prefix := string(nameRunes[:3])
+	if prefix != "COM" && prefix != "LPT" {
+		return false
+	}
+	switch nameRunes[3] {
+	case '1', '2', '3', '4', '5', '6', '7', '8', '9', '\u00b9', '\u00b2', '\u00b3':
+		return true
+	default:
+		return false
+	}
 }
 
 func generatedPath(root string, components ...string) (string, error) {

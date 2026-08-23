@@ -187,6 +187,20 @@ func TestGenerateStructureRejectsProviderDerivedPathComponents(t *testing.T) {
 			}},
 		},
 		{
+			name: "Windows reserved superscript serial device name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "COM\u00b9"}},
+			}},
+		},
+		{
+			name: "Windows reserved superscript printer device name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "LPT\u00b2"}},
+			}},
+		},
+		{
 			name: "Win32 trailing period provider alias",
 			servers: []ServerTools{
 				{ServerName: "foo"},
