@@ -199,9 +199,23 @@ func fetchFromConfigWithFactory(ctx context.Context, configPath string, factory 
 
 func expandProviderConfig(providerConfig *config.MCPClientConfigV2) *config.MCPClientConfigV2 {
 	expanded := *providerConfig
+	expanded.Command = os.ExpandEnv(providerConfig.Command)
+	expanded.URL = os.ExpandEnv(providerConfig.URL)
 	expanded.Args = make([]string, len(providerConfig.Args))
 	for i, arg := range providerConfig.Args {
 		expanded.Args[i] = os.ExpandEnv(arg)
+	}
+	if providerConfig.Env != nil {
+		expanded.Env = make(map[string]string, len(providerConfig.Env))
+		for name, value := range providerConfig.Env {
+			expanded.Env[name] = os.ExpandEnv(value)
+		}
+	}
+	if providerConfig.Headers != nil {
+		expanded.Headers = make(map[string]string, len(providerConfig.Headers))
+		for name, value := range providerConfig.Headers {
+			expanded.Headers[name] = os.ExpandEnv(value)
+		}
 	}
 	return &expanded
 }

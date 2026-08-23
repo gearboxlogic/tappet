@@ -20,17 +20,20 @@ import (
 
 func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
 	t.Setenv("CAPSCOPE_GENERATOR_MODE", "serve")
+	t.Setenv("CAPSCOPE_GENERATOR_COMMAND", "fixture")
+	t.Setenv("CAPSCOPE_GENERATOR_HOST", "provider.invalid")
+	t.Setenv("CAPSCOPE_GENERATOR_TOKEN", "fixture-token")
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"stdio-provider": {
 			TransportType: config.MCPClientTypeStdio,
-			Command:       "fixture",
+			Command:       "${CAPSCOPE_GENERATOR_COMMAND}",
 			Args:          []string{"--${CAPSCOPE_GENERATOR_MODE}"},
-			Env:           map[string]string{"TOKEN": "fixture-token"},
+			Env:           map[string]string{"TOKEN": "${CAPSCOPE_GENERATOR_TOKEN}"},
 		},
 		"streamable-provider": {
 			TransportType: config.MCPClientTypeStreamable,
-			URL:           "https://provider.invalid/mcp",
-			Headers:       map[string]string{"Authorization": "Bearer fixture"},
+			URL:           "https://${CAPSCOPE_GENERATOR_HOST}/mcp",
+			Headers:       map[string]string{"Authorization": "Bearer ${CAPSCOPE_GENERATOR_TOKEN}"},
 		},
 	}})
 
@@ -70,9 +73,11 @@ func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, servers, 2)
 	assert.Equal(t, []string{"stdio-provider", "streamable-provider"}, []string{servers[0].ServerName, servers[1].ServerName})
+	assert.Equal(t, "fixture", seen["stdio-provider"].Command)
 	assert.Equal(t, "fixture-token", seen["stdio-provider"].Env["TOKEN"])
 	assert.Equal(t, []string{"--serve"}, seen["stdio-provider"].Args)
-	assert.Equal(t, "Bearer fixture", seen["streamable-provider"].Headers["Authorization"])
+	assert.Equal(t, "https://provider.invalid/mcp", seen["streamable-provider"].URL)
+	assert.Equal(t, "Bearer fixture-token", seen["streamable-provider"].Headers["Authorization"])
 	assert.Equal(t, 2, fixture.startCount())
 	assert.Equal(t, 2, fixture.initializeCount())
 
@@ -119,14 +124,16 @@ func TestFetchFromConfigRejectsPartialInventory(t *testing.T) {
 }
 
 func TestFetchFromConfigPassesStdioEnvironment(t *testing.T) {
+	t.Setenv("CAPSCOPE_GENERATOR_COMMAND", os.Args[0])
+	t.Setenv("CAPSCOPE_GENERATOR_CONFIGURED_VALUE", "configured-value")
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"environment-fixture": {
 			TransportType: config.MCPClientTypeStdio,
-			Command:       os.Args[0],
+			Command:       "${CAPSCOPE_GENERATOR_COMMAND}",
 			Args:          []string{"-test.run=^TestGeneratorStdioProvider$"},
 			Env: map[string]string{
 				"CAPSCOPE_GENERATOR_FIXTURE": "enabled",
-				"CAPSCOPE_GENERATOR_VALUE":   "configured-value",
+				"CAPSCOPE_GENERATOR_VALUE":   "${CAPSCOPE_GENERATOR_CONFIGURED_VALUE}",
 			},
 		},
 	}})
@@ -153,12 +160,14 @@ func TestFetchFromConfigSupportsStreamableHTTPHeaders(t *testing.T) {
 		handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(server.Close)
+	t.Setenv("CAPSCOPE_GENERATOR_URL", server.URL)
+	t.Setenv("CAPSCOPE_GENERATOR_AUTH", "configured-token")
 
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"streamable-fixture": {
 			TransportType: config.MCPClientTypeStreamable,
-			URL:           server.URL,
-			Headers:       map[string]string{"Authorization": "Bearer configured-token"},
+			URL:           "${CAPSCOPE_GENERATOR_URL}",
+			Headers:       map[string]string{"Authorization": "Bearer ${CAPSCOPE_GENERATOR_AUTH}"},
 		},
 	}})
 

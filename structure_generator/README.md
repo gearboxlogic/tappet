@@ -1,6 +1,6 @@
 # CapScope structure generator
 
-`capscope-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a CapScope configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It expands environment placeholders in provider arguments and applies configured provider environment variables and HTTP headers.
+`capscope-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a CapScope configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It expands environment placeholders in provider commands, arguments, environment values, URLs, and header values.
 
 ```bash
 make build
