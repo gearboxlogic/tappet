@@ -400,8 +400,12 @@ not create a partial handle. V1 must ship safe finite defaults and expose quota
 failures through metrics and logs.
 
 Process-local spill objects expire after their configured lifetime and are
-removed at shutdown. Their handles must be unguessable and excluded from logs.
-They are not MCP protocol sessions and must not carry hidden capability
+removed at shutdown. Their handles are bearer secrets: they must be unguessable
+and must never appear raw in logs, trace attributes or events, metric labels,
+error messages, panic reports, or audit payloads. Telemetry may correlate a
+handle only through an irreversible keyed digest produced with a
+telemetry-specific secret; that digest is never accepted by `read`. Result
+handles are not MCP protocol sessions and must not carry hidden capability
 activation state. A single-process V1 may use local storage. A replicated
 deployment must use a shared bounded spill store addressable by result reference
 or explicitly disable spill retrieval; process-local handles alone are not a
@@ -468,6 +472,31 @@ lazy-keep-alive
 Only `lazy` is required for the first vertical slice. Idle timeout should be configurable and disabled for providers known to be expensive or stateful.
 
 Process lifecycle is separate from MCP protocol session state. A stateless MCP request model does not require restarting a stdio provider for each call.
+
+#### 6.6.1 Downstream transport frame limits
+
+Every message received from a downstream provider has a finite pre-decode
+limit, regardless of method or direction of the JSON-RPC exchange. V1 permits
+at most 16 MiB of encoded data per downstream protocol message. The limit
+applies to initialize and discovery responses, invocation results, errors,
+notifications, ping responses, progress events, and unsolicited requests or
+callbacks. The stricter metadata and result-ingestion quotas still apply after
+this transport boundary.
+
+Stdio adapters enforce the ceiling while reading a frame and never accumulate
+an oversized line first. HTTP adapters use bounded body readers even without a
+valid `Content-Length`; streaming transports enforce the limit independently
+for each event. The bound must sit below the SDK decoder. An SDK or transport
+that cannot expose a pre-decode boundary is unsupported for downstream V1 use.
+
+An exceeded frame returns `provider_frame_limit_exceeded`, fails every affected
+in-flight request, and closes the protocol connection. CapScope terminates a
+stdio child whose stream can no longer be trusted and closes an HTTP or event
+stream session; it does not skip bytes or attempt in-place resynchronization.
+The prior atomic metadata-cache snapshot remains intact, but no further request
+is accepted until the provider manager establishes and initializes a fresh
+connection. Repeated violations feed normal failure backoff and bounded
+telemetry.
 
 ### 6.7 Metadata cache
 
@@ -543,7 +572,12 @@ cache.load
 cache.refresh
 ```
 
-Record identifiers, versions, durations, result classifications, cache hits, and provider lifecycle events. Do not record secrets, unrestricted model prompts, or raw large outputs by default.
+Record non-secret identifiers, versions, durations, result classifications,
+cache hits, and provider lifecycle events. Do not record secrets, unrestricted
+model prompts, or raw large outputs by default. Spill `result_ref` values are
+bearer secrets and are excluded from logs, traces, metrics, errors, and audit
+payloads; only the irreversible telemetry correlation digest described in
+section 6.5.1 may be recorded.
 
 ## 7. State model
 

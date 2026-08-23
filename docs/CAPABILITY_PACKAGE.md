@@ -60,6 +60,10 @@ spec:
 
   skills:
     - path: skills/github-actions-debugging
+      resources:
+        - id: common-failures
+          kind: reference
+          path: references/common-failures.md
 
   operations:
     - id: inspect-failed-checks
@@ -167,9 +171,29 @@ A future package composition feature requires a separate decision. Do not silent
 ```yaml
 skills:
   - path: skills/github-actions-debugging
+    resources:
+      - id: common-failures
+        kind: reference
+        path: references/common-failures.md
 ```
 
 Each path points to an Agent Skills directory containing `SKILL.md`.
+
+Supporting files are never discovered by recursively walking that directory.
+Each V1-readable file must appear in the skill entry's bounded `resources`
+collection with a skill-local stable `id`, `kind: reference`, and a normalized
+path relative to the skill directory. The path must remain inside that skill
+directory and pass the package containment rules. Unlisted files, including a
+file merely linked from `SKILL.md`, are not indexed, snapshotted, counted, or
+exposed by CapScope.
+
+Installation snapshots every listed resource and assigns an opaque artifact
+reference binding the package version and manifest digest, skill digest,
+resource ID, and content digest. `describe` returns only bounded resource
+metadata: ID, media type, byte count, digest, and the exact artifact reference.
+`read` accepts that reference and returns the immutable content in bounded
+chunks. A changed package or skill produces a new reference; an old binding
+returns a typed stale-reference result instead of resolving by current path.
 
 CapScope should index:
 
@@ -182,11 +206,13 @@ CapScope should index:
 CapScope should defer:
 
 - full `SKILL.md` body
-- references
-- scripts
-- assets
+- explicitly listed supporting references
 
 until explicitly read.
+
+Scripts and assets are not implicitly enumerable or readable in V1. Adding
+explicit resource kinds for them requires a format revision with media, size,
+and execution-boundary rules; listing a script would never make it executable.
 
 ### Skill boundaries
 
@@ -358,12 +384,16 @@ canonical encoded JSON representation. These limits cover material returned by
 | YAML syntax nodes | 16,384 |
 | YAML aliases, anchors, or merge keys | 0 |
 | skills | 32 entries |
+| skill resources | 128 entries per package, 32 per skill |
 | operations | 128 entries |
 | context references | 128 entries |
 | providers | 32 entries |
 | skill path | 512 bytes |
 | indexed skill name | 128 bytes |
 | indexed skill description | 1,024 bytes |
+| skill resource ID | 128 bytes |
+| skill resource kind | 32 bytes |
+| skill resource path | 512 bytes |
 | operation ID | 128 bytes |
 | operation description | 1,024 bytes |
 | operation provider alias | 128 bytes |
@@ -417,6 +447,8 @@ Reject packages with:
 - symlinked package content or paths that fail canonical containment
 - invalid Agent Skills metadata
 - duplicate normalized skill paths
+- duplicate skill resource IDs or normalized resource paths within a skill
+- unlisted or unsupported skill resources requested for publication
 - duplicate operation IDs
 - duplicate context reference IDs or normalized context paths
 - unknown provider references
@@ -427,10 +459,11 @@ Reject packages with:
   manifest, or aggregate limit
 
 Every manifest collection addressed by `id` must be unique within its artifact
-kind. V1 therefore validates operation IDs, context reference IDs, and provider
-aliases before constructing artifact references. The explicit reference-kind
-prefix keeps those three namespaces separate. Collections addressed by path,
-including skills, reject duplicate normalized paths.
+kind. V1 therefore validates operation IDs, context reference IDs, provider
+aliases, and each skill's resource IDs before constructing artifact references.
+The explicit reference-kind prefix keeps those namespaces separate.
+Collections addressed by path, including skills and their resources, reject
+duplicate normalized paths within their documented scope.
 
 Warnings may be appropriate when a provider is offline and strict target validation cannot run.
 
