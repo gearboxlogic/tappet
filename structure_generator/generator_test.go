@@ -155,6 +155,38 @@ func TestGenerateStructureRejectsProviderDerivedPathComponents(t *testing.T) {
 			}},
 		},
 		{
+			name: "hierarchy delimiter in tool name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "read.file"}},
+			}},
+		},
+		{
+			name:    "Windows reserved provider name",
+			servers: []ServerTools{{ServerName: "CON"}},
+		},
+		{
+			name: "Windows reserved tool name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "NUL"}},
+			}},
+		},
+		{
+			name: "Windows reserved serial device name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "com1"}},
+			}},
+		},
+		{
+			name: "Windows reserved printer device name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "LPT9"}},
+			}},
+		},
+		{
 			name: "Win32 trailing period provider alias",
 			servers: []ServerTools{
 				{ServerName: "foo"},
@@ -202,7 +234,7 @@ func TestGenerateStructureRejectsCaseFoldingNameCollisions(t *testing.T) {
 		},
 		{
 			name:        "reserved root name",
-			servers:     []ServerTools{{ServerName: "ROOT.JSON"}},
+			servers:     []ServerTools{{ServerName: "ROOT"}},
 			errorSubstr: "reserved for the hierarchy root",
 		},
 		{

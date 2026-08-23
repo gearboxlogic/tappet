@@ -130,7 +130,7 @@ func validateExistingHierarchyDirectory(outputDir string) error {
 func validateGeneratedNames(servers []ServerTools) error {
 	serverNames := make(map[string]struct{}, len(servers))
 	foldedServerNames := make(map[string]string, len(servers))
-	rootNameKey := foldGeneratedName("root.json")
+	rootNameKey := foldGeneratedName("root")
 	for _, server := range servers {
 		if err := validateGeneratedComponent("provider", server.ServerName); err != nil {
 			return err
@@ -180,13 +180,37 @@ func foldGeneratedName(name string) string {
 
 func validateGeneratedComponent(kind, name string) error {
 	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) ||
-		filepath.VolumeName(name) != "" || strings.ContainsAny(name, `/\\`) || strings.ContainsRune(name, 0) {
+		filepath.VolumeName(name) != "" || strings.ContainsAny(name, `/\\<>:"|?*`) {
 		return fmt.Errorf("invalid %s name for generated path: %q", kind, name)
+	}
+	for _, char := range name {
+		if char < 32 {
+			return fmt.Errorf("invalid %s name for generated path: control characters are not portable: %q", kind, name)
+		}
 	}
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
 		return fmt.Errorf("invalid %s name for generated path: trailing periods and spaces are not portable: %q", kind, name)
 	}
+	if strings.ContainsRune(name, '.') {
+		return fmt.Errorf("invalid %s name for generated path: periods conflict with the hierarchy delimiter: %q", kind, name)
+	}
+	if isReservedWindowsDeviceName(name) {
+		return fmt.Errorf("invalid %s name for generated path: reserved Windows device name: %q", kind, name)
+	}
 	return nil
+}
+
+func isReservedWindowsDeviceName(name string) bool {
+	upperName := strings.ToUpper(name)
+	switch upperName {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return true
+	}
+	if len(upperName) != 4 {
+		return false
+	}
+	prefix := upperName[:3]
+	return (prefix == "COM" || prefix == "LPT") && upperName[3] >= '1' && upperName[3] <= '9'
 }
 
 func generatedPath(root string, components ...string) (string, error) {
