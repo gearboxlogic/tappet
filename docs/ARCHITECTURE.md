@@ -382,22 +382,53 @@ limit. The outer content contains only a bounded notice directing the caller to
 }
 ```
 
-The result reference is an opaque application handle. A caller retrieves it
-through bounded `read` calls using an offset and maximum decoded byte count.
-Each byte range is base64 encoded, and each response reports the next offset
-and whether the result is complete. Reassembly preserves the complete typed MCP
-result. If storage fails, `invoke` returns an explicit bounded-output error
-instead of a partial result.
+Each result or error spill reference is an opaque application handle. A caller
+retrieves it through bounded `read` calls using an offset and maximum decoded
+byte count. Each byte range is base64 encoded, and each response reports the
+next offset and whether the spill is complete. Reassembly preserves the complete
+typed MCP result or JSON-RPC error. If storage fails, `invoke` returns an
+explicit bounded-output error instead of a partial value.
+
+A downstream JSON-RPC error is not an MCP `CallToolResult` and follows the same
+bounded-preservation rule separately. When the complete encoded error object
+fits the broker response limit, CapScope forwards its numeric `code`, `message`,
+and structured `data` unchanged. When it exceeds the inline limit but fits the
+accepted downstream frame and spill limits, CapScope stores a lossless encoding
+of those three original fields in an error spill. The bounded outward JSON-RPC
+error retains the original numeric code, uses the fixed message
+`Downstream error payload spilled`, and puts only this broker envelope in
+`data`:
+
+```json
+{
+  "io.capscope.proxy": {
+    "disposition": "spilled_error",
+    "error_ref": "error:opaque-handle",
+    "media_type": "application/json",
+    "stored_bytes": 1048576,
+    "sha256": "hex-digest",
+    "expires_at": "RFC3339 timestamp"
+  }
+}
+```
+
+`capscope.read` retrieves that error reference in bounded chunks; reassembly
+restores the exact original code, message, and data. The outer envelope never
+copies a partial provider `data` value or truncates the provider message. If
+error-spill admission fails, CapScope returns the distinct bounded
+`downstream_error_spill_failed` proxy error and does not pretend the original
+error was preserved. MCP results with `isError: true` remain typed
+`CallToolResult` values and use the ordinary result path above.
 
 The spill store must enforce finite, operator-configurable limits for incoming
-provider-result bytes, bytes per spill object, aggregate live bytes, live object
-count, object lifetime, and bytes per `read`. Provider adapters enforce the
-incoming limit while reading, before unbounded decoding or allocation. Spill
-admission reserves aggregate bytes and an object slot atomically. It may reclaim
-expired objects, but it must not evict an unexpired object promised to a caller.
-An oversized result or exhausted store returns a distinct typed error and does
-not create a partial handle. V1 must ship safe finite defaults and expose quota
-failures through metrics and logs.
+provider-result or error bytes, bytes per spill object, aggregate live bytes,
+live object count, object lifetime, and bytes per `read`. Provider adapters
+enforce the incoming limit while reading, before unbounded decoding or
+allocation. Spill admission reserves aggregate bytes and an object slot
+atomically. It may reclaim expired objects, but it must not evict an unexpired
+object promised to a caller. An oversized value or exhausted store returns a
+distinct typed error and does not create a partial handle. V1 must ship safe
+finite defaults and expose quota failures through metrics and logs.
 
 Process-local spill objects expire after their configured lifetime and are
 removed at shutdown. Their handles are bearer secrets: they must be unguessable
@@ -751,13 +782,18 @@ Output: one deterministic page of skill metadata, operation cards, and
 reference metadata, plus either the full input and output schemas or an exact
 schema artifact reference for each operation ID named in `operation_schemas`.
 Page items are ordered by section and stable ID. The response includes total
-counts and an opaque `next_cursor`; `limit` has a finite maximum. The cursor is
-bound to the capability version and digest plus the requested `include` set, so
-a changed capability or structure selector returns an explicit stale-cursor
-error instead of mixing snapshots. `operation_schemas` is an independent exact
-selector and may be supplied on any page; selected schema content counts toward
-that response's size bound but does not change the structure cursor. Individual
-metadata entries are subject to package validation limits.
+counts and an opaque `next_cursor`; `limit` has a finite maximum. At the first
+page, `describe` atomically captures one projection generation containing the
+capability version and digest plus the ordered metadata-cache generation IDs for
+every provider relevant to the requested structure. The cursor binds that
+projection generation and the requested `include` set. A package change,
+provider metadata refresh, empty-cache transition, or structure-selector change
+invalidates the cursor and returns an explicit stale-cursor error instead of
+mixing package or operation metadata snapshots. `operation_schemas` is an
+independent exact selector and may be supplied on any page, but it is resolved
+against the same bound projection generation; selected schema content counts
+toward that response's size bound without changing the structure cursor.
+Individual metadata entries are subject to package validation limits.
 
 Each operation card with cached metadata includes its schema reference, digest,
 observation time, and freshness state. With an empty cache it instead reports
@@ -792,7 +828,8 @@ only when it fits the response limit. Larger accepted artifacts use the same
 `offset`, `max_bytes`, base64 chunk, byte-count, and digest fields shown below,
 with their stable artifact reference instead of a temporary result reference.
 
-For an oversized invocation result, the same tool accepts a result reference:
+For an oversized invocation result or downstream JSON-RPC error, the same tool
+accepts the corresponding spill reference:
 
 ```json
 {
@@ -819,7 +856,8 @@ Output:
 ```
 
 Reassembling the decoded byte ranges yields the complete typed provider result
-represented by the spill object. The digest verifies the reassembled value.
+or original JSON-RPC error represented by the spill object. The digest verifies
+the reassembled value.
 `offset`, `next_offset`, `max_bytes`, and `stored_bytes` count decoded bytes in
 the stored UTF-8 JSON representation, not base64 characters.
 
