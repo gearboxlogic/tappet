@@ -37,6 +37,8 @@ Work:
 - verify modern stdio requests
 - retain legacy negotiation where practical
 - preserve structured content, output schemas, result types, and errors
+- advertise no unsupported provider-to-client callback capabilities
+- reject unsolicited multi-round-trip callbacks promptly and observably
 - run official MCP conformance suites in CI
 - add dual-era downstream fixtures
 
@@ -48,6 +50,7 @@ Exit criteria:
 
 - documented conformance results by protocol version and transport
 - no hidden capability state tied to protocol sessions
+- provider connections or invocations requiring unsupported callbacks fail within their applicable deadline
 - modern and legacy provider fixtures pass
 
 ## Milestone 2: Capability package and registry
@@ -82,7 +85,7 @@ Work:
 - deterministic lexical ranking
 - optional path-constrained search
 - explainable match reasons
-- `describe` materialization
+- deterministic cursor pagination for `describe` materialization
 - exact operation-schema selectors in `describe`
 - Agent Skill body reads
 - individual reference reads
@@ -103,6 +106,7 @@ Exit criteria:
 - no unrelated full skill bodies or operation schemas in search output
 - `describe` returns schema content or an exact schema reference only for explicitly selected operation IDs
 - every accepted materialized artifact remains completely retrievable within response bounds
+- large capability structures remain completely retrievable across stable pages
 - deterministic results across runs
 
 ## Milestone 4: Provider manager and metadata cache
