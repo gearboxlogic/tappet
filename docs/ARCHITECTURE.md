@@ -349,6 +349,16 @@ that next chunk atomically replaces the prior replay record. Thus one replay
 record per lease protects every prepared chunk without retaining an unbounded
 history.
 
+Advancement is serialized per lease and guarded by a monotonic lease-generation
+compare-and-swap. For one expected offset, the first request tuple containing
+`ref`, `offset`, and `max_bytes` to commit wins. An identical concurrent or
+later tuple receives the committed byte-identical replay. A competing tuple
+with a different `max_bytes` receives bounded `continuation_conflict` without
+preparing or exposing another chunk and without changing the replay slot. Only
+a request at the committed response's `next_offset` may advance the generation
+and replace that replay. A losing request can therefore never expose bytes that
+the lease no longer knows how to replay.
+
 A non-final replay remains available until it is replaced, the five-minute idle
 deadline passes, or the one-hour absolute deadline passes. Preparing a final
 chunk retains the immutable object and its exact response replay for five
@@ -537,6 +547,12 @@ response replay records. It may use a shared bounded store addressable by opaque
 handle, or encode authenticated owner-replica routing in the handle and enforce
 explicit affinity for the handle's full published lifetime. Affinity is derived
 from the application handle, never an implicit MCP session or client connection.
+Shared-store lease and replay records are durable for their published lifetime
+and are garbage-collection roots. Collection uses a transaction, epoch, or
+equivalent fence so startup or quota-driven sweeping on one replica cannot
+reclaim an object referenced by an unexpired lease owned by another replica.
+An owner-routed store confines collection to the durable owner namespace and
+retains its lease records across owner restart.
 
 If neither shared storage nor handle-routed affinity is available, the
 deployment must disable every path that can emit an affected handle and return
@@ -561,6 +577,16 @@ array counts as a node. The scanner never materializes a node beyond either
 budget. A transport or SDK integration that cannot enforce the byte, depth, and
 node-count boundaries below its general object decoder is not supported on an
 untrusted broker endpoint.
+
+The tokenizer retains each JSON number's original validated lexeme. Invocation
+arguments remain raw numeric tokens or `json.Number`-equivalent decimal strings
+through schema validation and downstream encoding; validation uses exact
+integer or decimal arithmetic and never converts through binary `float64`.
+Forwarding preserves the accepted numeric lexeme. The same rule applies at the
+downstream transport boundary to structured result content, metadata, and
+JSON-RPC error data before any typed SDK model can round a value. An adapter
+that can expose these values only through `map[string]interface{}` values
+decoded as `float64` cannot provide the V1 lossless invocation path.
 
 An oversized inbound message invalidates the affected transport. CapScope may
 emit a bounded `broker_frame_limit_exceeded` response when the framing still
@@ -609,13 +635,19 @@ typed resource response under finite per-resource and aggregate byte quotas,
 and stages all snapshot capacity before returning the tool result.
 The block URI is then rewritten to an unguessable
 `capscope-resource://<opaque-handle>` URI. All other block fields remain
-unchanged. The original provider URI exists only in bounded transient call state
-while CapScope performs `resources/read`; it is treated as a possible signed or
-credential-bearing secret and is excluded from telemetry. After the read
-completes or fails, CapScope discards the plaintext URI. The snapshot record
-retains only an irreversible keyed URI digest for correlation, plus the provider
-fingerprint, content digest, and invocation ID. The digest is never accepted as
-a read route and stale checks do not require the original URI.
+unchanged. Before computing the snapshot encoding or digest, CapScope also
+rewrites every standard `ResourceContents.uri` field in the downstream
+`resources/read` response to that broker URI, or to an opaque child URI backed
+by the same snapshot. Other typed resource-content fields remain unchanged.
+The original provider URI and any provider-originated nested content URI exist
+only in bounded transient call state
+while CapScope performs `resources/read`; they are treated as possible signed or
+credential-bearing secrets and are excluded from telemetry. After the read
+completes or fails, CapScope discards every plaintext provider URI. Neither the
+typed snapshot nor its stored encoding retains one. The snapshot record retains
+only an irreversible keyed digest of the requested provider URI for correlation,
+plus the provider fingerprint, content digest, and invocation ID. The digest is
+never accepted as a read route and stale checks do not require the original URI.
 
 On the successful result path, resource snapshots, the fully adapted result
 encoding, and any required result spill are one publication transaction.
@@ -636,7 +668,8 @@ so ordinary finite handle expiry reclaims the published object.
 
 The outward broker advertises MCP resource support for a scoped
 `resources/read` route. Reading the rewritten URI returns the exact snapshotted
-typed resource contents without restarting or consulting the provider.
+broker-adapted typed resource contents without restarting or consulting the
+provider; only the standard URI fields differ from the downstream response.
 `resources/list` does not enumerate ephemeral handles, and arbitrary provider
 URIs are rejected; possession of the broker-issued URI is required. A snapshot
 is admitted only when its complete `resources/read` response fits the broker
@@ -695,6 +728,15 @@ The transport reserves global request-count and encoded-byte capacity before
 reading or retaining the full bounded frame. HTTP uses the declared length when
 valid and pessimistically reserves the 1 MiB message maximum otherwise; framed
 transports pause before consuming another frame when no ingress slot exists.
+Capacity reservation starts a non-renewable 30-second ingress deadline covering
+the complete body or frame read, bounded tokenization, and method admission;
+progress does not extend it. HTTP additionally sets a five-second connection
+header-read deadline before handler admission. Expiry releases every count and
+byte reservation, cancels decoding, and closes or invalidates the affected
+request transport; HTTP may return a bounded 408 when safe. The ordinary
+request deadline begins no later than ingress reservation, so method decoding
+cannot reset its elapsed time. Deployments may lower these values, but disabling
+them is unsupported on an untrusted broker endpoint.
 After the bounded envelope identifies the method, admission atomically moves the
 request to that method's queue or rejects it without starting handler work.
 Unknown and malformed methods use a finite control-method bucket within the same
@@ -1176,20 +1218,25 @@ reference metadata, plus either the full input and output schemas or an exact
 schema artifact reference for each operation ID named in `operation_schemas`.
 Page items are ordered by section and stable ID. The response includes total
 counts and an opaque `next_cursor`; `limit` has a finite maximum. At the first
-page, `describe` atomically captures one projection generation containing the
-capability version and digest plus the ordered metadata-cache generation IDs,
-including the explicit empty-cache generation, for every provider referenced by
-the capability. It captures all capability providers even when the initial
-`include` set contains only provider-independent structure. The cursor binds
-that projection generation and the requested `include` set. A package change,
-provider metadata refresh, empty-cache transition, or structure-selector change
-invalidates the cursor and returns an explicit stale-cursor error instead of
-mixing package or operation metadata snapshots. `operation_schemas` is an
-independent exact selector and may first appear on any page because every
-possible operation provider is already in the bound projection; the selector is
-resolved against that generation. Selected schema content counts toward the
-response's size bound without changing the structure cursor. Individual
-metadata entries are subject to package validation limits.
+page, `describe` atomically materializes one bounded immutable projection
+containing the capability version and digest plus only the sections requested
+by `include`. When operations are included, the projection retains the exact
+metadata-cache snapshots needed by those operation cards; a skills-only or
+references-only projection retains no provider generation. The opaque cursor
+binds that projection, the requested `include` set, and a page offset. Later
+pages read the same retained projection, so package reinstall, provider refresh,
+or empty-cache transition cannot mix generations or force a pagination restart.
+New initial requests observe the new state. Projection bytes, live cursor count,
+a five-minute idle lifetime, and a one-hour absolute lifetime are quota-bound;
+an expired or unavailable projection returns an explicit stale-cursor error.
+
+`operation_schemas` is an independent exact selector and may first appear on
+any page. Each selector is resolved against the current provider metadata at
+that request and reports its own generation, digest, observation time, and
+freshness state; it neither mutates nor broadens the retained structure
+projection. Selected schema content counts toward the response's size bound
+without changing the structure cursor. Individual metadata entries are subject
+to package validation limits.
 
 Each operation card with cached metadata includes its schema reference, digest,
 observation time, and freshness state. With an empty cache it instead reports
