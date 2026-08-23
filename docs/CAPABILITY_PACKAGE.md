@@ -359,8 +359,15 @@ A failed install never changes the active generation.
 
 Invocation resolution atomically leases one immutable registry generation and
 its exact operation record, provider binding, provider-configuration
-fingerprint, and schema digest before the invocation enters any queue. That
-lease remains live through argument validation, provider acquisition and call,
+fingerprint before the invocation enters any queue. It does not pin a provider
+metadata generation or schema digest at queue admission. At dispatch, after any
+refresh required by `ARCHITECTURE.md` section 6.7, CapScope atomically selects
+the current mapped tool and schema for the leased binding, validates the
+arguments against that schema, and leases that metadata generation and digest
+through transmission and terminal publication. If the current provider
+metadata cannot be reconciled with the leased operation and binding, the call
+fails with a typed provider-metadata result before transmitting bytes. The
+registry-generation lease remains live through provider acquisition and call,
 resource materialization, and terminal result or preservation-error
 publication. Reinstall or uninstall prevents new resolutions from using the old
 generation but cannot retarget a queued invocation, combine old arguments with
@@ -369,12 +376,13 @@ call. Old provider state remains subject to the global residency budget.
 
 If resolution cannot acquire a generation lease because retirement has already
 begun, CapScope may re-resolve entirely against the new generation before
-transmitting bytes. It must revalidate the arguments and provider binding as one
-unit or return typed `operation_generation_stale`; it never mixes generations.
-Once any downstream request byte has been transmitted, the generation cannot
-change and ambiguous-delivery rules apply. Uninstall and reinstall are not
-authorization revocation mechanisms; providers still enforce authorization for
-already admitted calls.
+transmitting bytes. It must revalidate the provider binding as one unit and then
+perform the same dispatch-time current-schema selection and argument validation,
+or return typed `operation_generation_stale`; it never mixes package or binding
+generations. Once any downstream request byte has been transmitted, the package,
+binding, and selected metadata generations cannot change and ambiguous-delivery
+rules apply. Uninstall and reinstall are not authorization revocation mechanisms;
+providers still enforce authorization for already admitted calls.
 
 Snapshot objects are reference-counted by active registry generations and by
 explicit, bounded continuation-handle leases. Resolving an artifact reference,
