@@ -153,9 +153,7 @@ func main() {
 
 // fetchFromConfig loads config and fetches tools from all MCP servers
 func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	return fetchFromConfigWithFactory(ctx, configPath, newCatalogConnection)
+	return fetchFromConfigWithFactory(context.Background(), configPath, newCatalogConnection)
 }
 
 func fetchFromConfigWithFactory(ctx context.Context, configPath string, factory catalogClientFactory) ([]generator.ServerTools, error) {
