@@ -27,8 +27,9 @@ func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) 
 	return newMCPClient(name, conf, 0)
 }
 
-// NewMCPClientWithResponseLimit creates a client whose transport rejects
-// downstream response frames larger than maxResponseBytes before JSON decoding.
+// NewMCPClientWithResponseLimit creates a client whose transport rejects each
+// downstream response frame or SSE event larger than maxResponseBytes before
+// JSON decoding.
 func NewMCPClientWithResponseLimit(name string, conf *config.MCPClientConfigV2, maxResponseBytes int64) (*Client, error) {
 	if maxResponseBytes <= 0 {
 		return nil, errors.New("maximum response bytes must be positive")

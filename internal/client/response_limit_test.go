@@ -84,6 +84,57 @@ func TestResponseLimitedRoundTripperBoundsUndeclaredBody(t *testing.T) {
 	require.ErrorIs(t, readErr, ErrResponseLimitExceeded)
 }
 
+func TestResponseLimitedRoundTripperResetsLimitForEachSSEEvent(t *testing.T) {
+	event := "data: 1234\r\n\r\n"
+	stream := event + event
+	roundTripper := responseLimitedRoundTripper{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          io.NopCloser(strings.NewReader(stream)),
+				ContentLength: int64(len(stream)),
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream; charset=utf-8"},
+				},
+			}, nil
+		}),
+		maxBytes: int64(len(event)),
+	}
+
+	response, err := roundTripper.RoundTrip(mustRequest(t))
+	require.NoError(t, err)
+	data, readErr := io.ReadAll(response.Body)
+
+	require.NoError(t, readErr)
+	assert.Equal(t, stream, string(data))
+}
+
+func TestResponseLimitedRoundTripperRejectsOversizedSSEEventBeforeRelease(t *testing.T) {
+	event := "data: 12345\n\n"
+	body := &trackingReadCloser{Reader: strings.NewReader(event)}
+	roundTripper := responseLimitedRoundTripper{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          body,
+				ContentLength: -1,
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream"},
+				},
+			}, nil
+		}),
+		maxBytes: int64(len(event) - 1),
+	}
+
+	response, err := roundTripper.RoundTrip(mustRequest(t))
+	require.NoError(t, err)
+	data, readErr := io.ReadAll(response.Body)
+
+	assert.Empty(t, data)
+	require.ErrorIs(t, readErr, ErrResponseLimitExceeded)
+	assert.True(t, body.closed.Load())
+}
+
 func TestLimitedStdioClientDefersProcessStart(t *testing.T) {
 	mcpClient, err := NewMCPClientWithResponseLimit("bounded", &config.MCPClientConfigV2{
 		TransportType: config.MCPClientTypeStdio,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -30,6 +31,11 @@ func (t responseLimitedRoundTripper) RoundTrip(request *http.Request) (*http.Res
 	if err != nil {
 		return nil, err
 	}
+	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if mediaType == "text/event-stream" {
+		response.Body = newSSEEventLimitedBody(response.Body, t.maxBytes)
+		return response, nil
+	}
 	if response.ContentLength > t.maxBytes {
 		_ = response.Body.Close()
 		return nil, fmt.Errorf("%w: content length %d exceeds %d bytes", ErrResponseLimitExceeded, response.ContentLength, t.maxBytes)
@@ -40,6 +46,84 @@ func (t responseLimitedRoundTripper) RoundTrip(request *http.Request) (*http.Res
 		maxBytes:  t.maxBytes,
 	}
 	return response, nil
+}
+
+type sseEventLimitedBody struct {
+	body       io.ReadCloser
+	reader     *bufio.Reader
+	maxBytes   int64
+	pending    []byte
+	pendingErr error
+}
+
+func newSSEEventLimitedBody(body io.ReadCloser, maxBytes int64) *sseEventLimitedBody {
+	return &sseEventLimitedBody{
+		body:     body,
+		reader:   bufio.NewReader(body),
+		maxBytes: maxBytes,
+	}
+}
+
+func (b *sseEventLimitedBody) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if len(b.pending) == 0 {
+		if b.pendingErr != nil {
+			err := b.pendingErr
+			b.pendingErr = nil
+			return 0, err
+		}
+		event, err := b.readEvent()
+		if len(event) == 0 {
+			return 0, err
+		}
+		b.pending = event
+		b.pendingErr = err
+	}
+
+	count := copy(buffer, b.pending)
+	b.pending = b.pending[count:]
+	return count, nil
+}
+
+func (b *sseEventLimitedBody) readEvent() ([]byte, error) {
+	event := make([]byte, 0, min(int64(4_096), b.maxBytes))
+	for {
+		fragment, err := b.reader.ReadSlice('\n')
+		if int64(len(event))+int64(len(fragment)) > b.maxBytes {
+			_ = b.body.Close()
+			return nil, fmt.Errorf("%w: SSE event exceeds %d bytes", ErrResponseLimitExceeded, b.maxBytes)
+		}
+		event = append(event, fragment...)
+
+		if err == nil {
+			if isSSEBlankLine(fragment) {
+				return event, nil
+			}
+			continue
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return event, err
+	}
+}
+
+func (b *sseEventLimitedBody) Close() error {
+	return b.body.Close()
+}
+
+func isSSEBlankLine(line []byte) bool {
+	if len(line) == 0 {
+		return false
+	}
+	for _, character := range line {
+		if character != '\r' && character != '\n' {
+			return false
+		}
+	}
+	return true
 }
 
 type responseLimitedBody struct {
