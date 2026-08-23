@@ -104,6 +104,26 @@ func TestGenerateStructureKeepsPreviousTreeWhenGenerationFails(t *testing.T) {
 	require.Contains(t, stable.Tools, "stable")
 }
 
+func TestGenerateStructureRejectsUnrecognizedExistingDirectory(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "not-a-hierarchy")
+	require.NoError(t, os.MkdirAll(outputDir, 0o755))
+	unrelatedPath := filepath.Join(outputDir, "keep.txt")
+	require.NoError(t, os.WriteFile(unrelatedPath, []byte("unrelated"), 0o644))
+
+	err := GenerateStructure([]ServerTools{{ServerName: "alpha"}}, outputDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to replace unrecognized output directory")
+	data, readErr := os.ReadFile(unrelatedPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "unrelated", string(data))
+}
+
+func TestGenerateStructureRejectsWorkingDirectoryAncestors(t *testing.T) {
+	err := GenerateStructure(nil, "..")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "output path must be a dedicated hierarchy directory")
+}
+
 func TestGenerateStructureRejectsInvalidOutputPath(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(filePath, []byte("not a directory"), 0o644))

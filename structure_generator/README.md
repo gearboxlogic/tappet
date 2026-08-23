@@ -9,7 +9,7 @@ make build
   --output testdata/mcp_hierarchy
 ```
 
-The generator performs the legacy MCP initialize handshake before listing tools and follows every `tools/list` cursor. Generation fails if any configured provider cannot return a complete inventory. It builds the hierarchy in a fresh staging directory and replaces the previous generated tree only after generation succeeds, so removed providers and tools do not remain as stale leaves. It never reports success with a partial hierarchy. It writes:
+The generator performs the legacy MCP initialize handshake before listing tools and follows every `tools/list` cursor. Generation fails if any configured provider cannot return a complete inventory. It builds the hierarchy in a fresh staging directory and replaces the previous generated tree only after generation succeeds, so removed providers and tools do not remain as stale leaves. Existing non-empty output must be recognizable as a generated hierarchy; working-directory ancestors and the system temporary directory are rejected. It never reports success with a partial hierarchy. It writes:
 
 ```text
 root.json

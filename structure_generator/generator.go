@@ -12,18 +12,16 @@ import (
 // Structure: structure/ (root) -> server_name/ (each server)
 func GenerateStructure(servers []ServerTools, outputDir string) error {
 	cleanOutputDir := filepath.Clean(outputDir)
-	if cleanOutputDir == "." || cleanOutputDir == string(filepath.Separator) {
-		return fmt.Errorf("output path must be a dedicated hierarchy directory: %s", cleanOutputDir)
+	if err := validateOutputLocation(cleanOutputDir); err != nil {
+		return err
 	}
 	parentDir := filepath.Dir(cleanOutputDir)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output parent directory: %w", err)
 	}
 
-	if info, err := os.Stat(cleanOutputDir); err == nil && !info.IsDir() {
-		return fmt.Errorf("output path is not a directory: %s", cleanOutputDir)
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to inspect output directory: %w", err)
+	if err := validateExistingHierarchyDirectory(cleanOutputDir); err != nil {
+		return err
 	}
 
 	stagingDir, err := os.MkdirTemp(parentDir, "."+filepath.Base(cleanOutputDir)+".tmp-")
@@ -40,6 +38,70 @@ func GenerateStructure(servers []ServerTools, outputDir string) error {
 	}
 	if err := replaceGeneratedDirectory(stagingDir, cleanOutputDir); err != nil {
 		return fmt.Errorf("failed to publish generated structure: %w", err)
+	}
+	return nil
+}
+
+func validateOutputLocation(outputDir string) error {
+	absOutput, err := filepath.Abs(outputDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve output path: %w", err)
+	}
+	absWorkingDir, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("failed to resolve working directory: %w", err)
+	}
+	relativeWorkingDir, err := filepath.Rel(absOutput, absWorkingDir)
+	if err != nil {
+		return fmt.Errorf("failed to compare output path with working directory: %w", err)
+	}
+	outputContainsWorkingDir := relativeWorkingDir == "." ||
+		(relativeWorkingDir != ".." && !strings.HasPrefix(relativeWorkingDir, ".."+string(filepath.Separator)))
+	absTempDir, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		return fmt.Errorf("failed to resolve temporary directory: %w", err)
+	}
+	if outputContainsWorkingDir || absOutput == absTempDir {
+		return fmt.Errorf("output path must be a dedicated hierarchy directory: %s", outputDir)
+	}
+	return nil
+}
+
+func validateExistingHierarchyDirectory(outputDir string) error {
+	entries, err := os.ReadDir(outputDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to inspect output directory: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	rootFound := false
+	for _, entry := range entries {
+		if entry.Name() == "root.json" {
+			if entry.Type().IsRegular() {
+				var root ToolNode
+				data, readErr := os.ReadFile(filepath.Join(outputDir, entry.Name()))
+				if readErr == nil && json.Unmarshal(data, &root) == nil && root.Overview != "" && len(root.Tools) == 0 {
+					rootFound = true
+					continue
+				}
+			}
+			return fmt.Errorf("refusing to replace unrecognized output directory: invalid root.json in %s", outputDir)
+		}
+		if !entry.IsDir() {
+			return fmt.Errorf("refusing to replace unrecognized output directory: unexpected file %s", filepath.Join(outputDir, entry.Name()))
+		}
+		providerIndex := filepath.Join(outputDir, entry.Name(), entry.Name()+".json")
+		if info, statErr := os.Lstat(providerIndex); statErr != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to replace unrecognized output directory: missing provider index %s", providerIndex)
+		}
+	}
+	if !rootFound {
+		return fmt.Errorf("refusing to replace unrecognized output directory without root.json: %s", outputDir)
 	}
 	return nil
 }
