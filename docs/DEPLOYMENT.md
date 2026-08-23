@@ -1,6 +1,6 @@
 # Deployment
 
-CapScope needs its JSON configuration and generated hierarchy at runtime. Downstream stdio provider commands must also exist in the image or host environment.
+Tappet needs its JSON configuration and generated hierarchy at runtime. Downstream stdio provider commands must also exist in the image or host environment.
 
 ## Docker
 
@@ -9,7 +9,7 @@ docker run --rm \
   -p 9090:9090 \
   -v "$PWD/config.docker.json:/config/config.json:ro" \
   -v "$PWD/testdata/mcp_hierarchy:/config/hierarchy:ro" \
-  ghcr.io/gearboxlogic/capscope:latest
+  ghcr.io/gearboxlogic/tappet:latest
 ```
 
 The Docker-specific configuration starts a Streamable HTTP server on port `9090` and uses the absolute hierarchy path `/config/hierarchy`. The repository image includes Node.js, `npx`, and `uvx` for configurations that launch those provider commands.
@@ -18,14 +18,14 @@ Run `make test-container` to build the image without publishing it, start a temp
 
 ### Image publication
 
-The manual Docker publishing workflow publishes only to `ghcr.io/gearboxlogic/capscope`. Milestone 0 intentionally retired the inherited optional backup-registry path because CapScope has no documented or supported secondary registry. Restoring secondary publication requires a separate reviewed change with an immutable action pin and credentials scoped to that registry.
+The manual Docker publishing workflow publishes only to `ghcr.io/gearboxlogic/tappet`. Milestone 0 intentionally retired the inherited optional backup-registry path because Tappet has no documented or supported secondary registry. Restoring secondary publication requires a separate reviewed change with an immutable action pin and credentials scoped to that registry.
 
 ## Docker Compose
 
 ```yaml
 services:
-  capscope:
-    image: ghcr.io/gearboxlogic/capscope:latest
+  tappet:
+    image: ghcr.io/gearboxlogic/tappet:latest
     volumes:
       - ./config.docker.json:/config/config.json:ro
       - ./testdata/mcp_hierarchy:/config/hierarchy:ro

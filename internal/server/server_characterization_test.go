@@ -7,22 +7,22 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gearboxlogic/capscope/internal/hierarchy"
+	"github.com/gearboxlogic/tappet/internal/hierarchy"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewCapScopeServerOutwardContract(t *testing.T) {
+func TestNewTappetServerOutwardContract(t *testing.T) {
 	h := loadServerTestHierarchy(t)
 	registry := hierarchy.NewServerRegistry(nil)
 	defer registry.Close()
 
-	srv, err := NewCapScopeServer(ServerDependencies{
+	srv, err := NewTappetServer(ServerDependencies{
 		Hierarchy: h,
 		Registry:  registry,
-		Name:      "CapScope",
+		Name:      "Tappet",
 		Version:   "0.1.0",
 	})
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestNewCapScopeServerOutwardContract(t *testing.T) {
 	initRequest.Params.ClientInfo = mcp.Implementation{Name: "contract-test"}
 	initialized, err := client.Initialize(context.Background(), initRequest)
 	require.NoError(t, err)
-	assert.Equal(t, "CapScope", initialized.ServerInfo.Name)
+	assert.Equal(t, "Tappet", initialized.ServerInfo.Name)
 	assert.Equal(t, "0.1.0", initialized.ServerInfo.Version)
 
 	listed, err := client.ListTools(context.Background(), mcp.ListToolsRequest{})
@@ -57,11 +57,11 @@ func TestNewCapScopeServerOutwardContract(t *testing.T) {
 	assert.Equal(t, []string{"execute_tool", "get_tools_in_category"}, names)
 }
 
-func TestNewCapScopeServerCategoryOutputIsDeterministic(t *testing.T) {
+func TestNewTappetServerCategoryOutputIsDeterministic(t *testing.T) {
 	h := loadServerTestHierarchy(t)
 	registry := hierarchy.NewServerRegistry(nil)
 	defer registry.Close()
-	srv, err := NewCapScopeServer(ServerDependencies{Hierarchy: h, Registry: registry, Name: "CapScope", Version: "test"})
+	srv, err := NewTappetServer(ServerDependencies{Hierarchy: h, Registry: registry, Name: "Tappet", Version: "test"})
 	require.NoError(t, err)
 
 	handler := srv.ListTools()["get_tools_in_category"].Handler
@@ -74,12 +74,12 @@ func TestNewCapScopeServerCategoryOutputIsDeterministic(t *testing.T) {
 	assert.Equal(t, first, second)
 }
 
-func TestNewCapScopeServerRejectsMissingDependencies(t *testing.T) {
-	_, err := NewCapScopeServer(ServerDependencies{})
+func TestNewTappetServerRejectsMissingDependencies(t *testing.T) {
+	_, err := NewTappetServer(ServerDependencies{})
 	assert.EqualError(t, err, "hierarchy is required")
 
 	h := loadServerTestHierarchy(t)
-	_, err = NewCapScopeServer(ServerDependencies{Hierarchy: h})
+	_, err = NewTappetServer(ServerDependencies{Hierarchy: h})
 	assert.EqualError(t, err, "server registry is required")
 }
 

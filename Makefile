@@ -7,14 +7,14 @@ CONTAINER_ENGINE ?= docker
 .PHONY: build
 build:
 	mkdir -p $(BUILD_DIR)
-	$(GO_BUILD) -o $(BUILD_DIR)/capscope ./cmd/capscope
-	$(GO_BUILD) -o $(BUILD_DIR)/capscope-structure-generator ./structure_generator/cmd
+	$(GO_BUILD) -o $(BUILD_DIR)/tappet ./cmd/tappet
+	$(GO_BUILD) -o $(BUILD_DIR)/tappet-structure-generator ./structure_generator/cmd
 
 .PHONY: build-linux-amd64
 build-linux-amd64:
 	mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 $(GO_BUILD) -o $(BUILD_DIR)/capscope-linux-amd64 ./cmd/capscope
-	GOOS=linux GOARCH=amd64 $(GO_BUILD) -o $(BUILD_DIR)/capscope-structure-generator-linux-amd64 ./structure_generator/cmd
+	GOOS=linux GOARCH=amd64 $(GO_BUILD) -o $(BUILD_DIR)/tappet-linux-amd64 ./cmd/tappet
+	GOOS=linux GOARCH=amd64 $(GO_BUILD) -o $(BUILD_DIR)/tappet-structure-generator-linux-amd64 ./structure_generator/cmd
 
 .PHONY: test
 test:
@@ -41,9 +41,9 @@ check: fmt-check test test-race vet build
 
 .PHONY: build-image
 build-image:
-	docker buildx build --platform=linux/amd64,linux/arm64 -t ghcr.io/gearboxlogic/capscope:latest . --push --provenance=false
+	docker buildx build --platform=linux/amd64,linux/arm64 -t ghcr.io/gearboxlogic/tappet:latest . --push --provenance=false
 
 .PHONY: test-container
 test-container:
-	$(CONTAINER_ENGINE) build -t capscope:smoke .
-	CONTAINER_ENGINE=$(CONTAINER_ENGINE) ./script/test-container.sh capscope:smoke
+	$(CONTAINER_ENGINE) build -t tappet:smoke .
+	CONTAINER_ENGINE=$(CONTAINER_ENGINE) ./script/test-container.sh tappet:smoke

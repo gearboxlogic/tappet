@@ -7,21 +7,21 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gearboxlogic/capscope/internal/hierarchy"
+	"github.com/gearboxlogic/tappet/internal/hierarchy"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func BenchmarkNewCapScopeServer(b *testing.B) {
+func BenchmarkNewTappetServer(b *testing.B) {
 	h := loadBenchmarkHierarchy(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for b.Loop() {
 		registry := hierarchy.NewServerRegistry(nil)
-		server, err := NewCapScopeServer(ServerDependencies{
+		server, err := NewTappetServer(ServerDependencies{
 			Hierarchy: h,
 			Registry:  registry,
-			Name:      "CapScope",
+			Name:      "Tappet",
 			Version:   "benchmark",
 		})
 		if err != nil {
@@ -38,10 +38,10 @@ func BenchmarkOutwardToolSurfaceEncoding(b *testing.B) {
 	h := loadBenchmarkHierarchy(b)
 	registry := hierarchy.NewServerRegistry(nil)
 	b.Cleanup(registry.Close)
-	server, err := NewCapScopeServer(ServerDependencies{
+	server, err := NewTappetServer(ServerDependencies{
 		Hierarchy: h,
 		Registry:  registry,
-		Name:      "CapScope",
+		Name:      "Tappet",
 		Version:   "benchmark",
 	})
 	if err != nil {

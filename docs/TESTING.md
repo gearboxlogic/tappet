@@ -21,9 +21,9 @@ Routine `go test ./...` runs do not download or execute third-party MCP packages
 
 ## Same-provider serialization
 
-CapScope retains the inherited per-provider mutex for this baseline. This is a transport compatibility rule, not a provider lifecycle design decision.
+Tappet retains the inherited per-provider mutex for this baseline. This is a transport compatibility rule, not a provider lifecycle design decision.
 
-At `mcp-go v0.43.2`, `client/transport/stdio.go` protects the response map but calls `stdin.Write` without a write mutex. Concurrent large JSON-RPC writes to one stdio pipe can interleave. Commit `d9288f566e64e841c641b0f0a106a3f7284dcfa0` added CapScope's inherited mutex after such concurrent calls timed out. Active tests pin the resulting policy:
+At `mcp-go v0.43.2`, `client/transport/stdio.go` protects the response map but calls `stdin.Write` without a write mutex. Concurrent large JSON-RPC writes to one stdio pipe can interleave. Commit `d9288f566e64e841c641b0f0a106a3f7284dcfa0` added Tappet's inherited mutex after such concurrent calls timed out. Active tests pin the resulting policy:
 
 - one provider receives one call at a time;
 - different providers can run concurrently;
@@ -33,6 +33,6 @@ Milestone 1 should recheck the serialization rule against the selected SDK versi
 
 ## Failed provider initialization
 
-At `mcp-go v0.43.2`, closing a failed stdio client can block while waiting for its child process. CapScope returns the original start or initialize error and performs that cleanup asynchronously. `TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds a failed client's `Close` call open and verifies that another provider can still load.
+At `mcp-go v0.43.2`, closing a failed stdio client can block while waiting for its child process. Tappet returns the original start or initialize error and performs that cleanup asynchronously. `TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds a failed client's `Close` call open and verifies that another provider can still load.
 
 Provider startup is coordinated per provider rather than under the registry-wide lock. `TestSlowProviderLoadDoesNotBlockOtherProviders` proves that one cold provider does not block another, `TestConcurrentCallsShareOneProviderLoad` proves concurrent requests do not duplicate startup, `TestLiveWaiterRetriesLoadCanceledByInitiatingCaller` gives each live waiter its own acquisition budget, and `TestProviderFinishingAfterRegistryCloseIsClosed` covers the shutdown race.

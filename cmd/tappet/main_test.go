@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/stretchr/testify/assert"
 )
 

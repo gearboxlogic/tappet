@@ -1,13 +1,13 @@
 # Configuration
 
-CapScope reads JSON from a local file or an HTTP(S) URL. Environment expansion is enabled by default.
+Tappet reads JSON from a local file or an HTTP(S) URL. Environment expansion is enabled by default.
 
 ```json
 {
   "mcpProxy": {
     "baseURL": "http://localhost:8080",
     "addr": ":8080",
-    "name": "CapScope",
+    "name": "Tappet",
     "version": "0.1.0",
     "type": "streamable-http",
     "hierarchyPath": "testdata/mcp_hierarchy",
@@ -28,7 +28,7 @@ CapScope reads JSON from a local file or an HTTP(S) URL. Environment expansion i
 }
 ```
 
-The `mcpProxy` JSON key is retained for configuration compatibility. It configures the outward CapScope server.
+The `mcpProxy` JSON key is retained for configuration compatibility. It configures the outward Tappet server.
 
 ## Outward server
 
@@ -67,12 +67,12 @@ Environment values use `${NAME}` syntax:
 
 ```bash
 export EXAMPLE_SERVER=/path/to/example-server
-./build/capscope --config config.json
+./build/tappet --config config.json
 ```
 
 ## Generated hierarchy
 
-`capscope-structure-generator` writes `root.json`, one provider overview, and one JSON file per tool. A leaf maps its public hierarchy name to its downstream provider and tool name:
+`tappet-structure-generator` writes `root.json`, one provider overview, and one JSON file per tool. A leaf maps its public hierarchy name to its downstream provider and tool name:
 
 ```json
 {

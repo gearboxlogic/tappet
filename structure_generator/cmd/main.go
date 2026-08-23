@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	capscopeclient "github.com/gearboxlogic/capscope/internal/client"
-	"github.com/gearboxlogic/capscope/internal/config"
-	generator "github.com/gearboxlogic/capscope/structure_generator"
+	tappetclient "github.com/gearboxlogic/tappet/internal/client"
+	"github.com/gearboxlogic/tappet/internal/config"
+	generator "github.com/gearboxlogic/tappet/structure_generator"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcptransport "github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -66,7 +66,7 @@ func (c *transportCatalogClient) Initialize(ctx context.Context, request mcp.Ini
 func (c *transportCatalogClient) ListToolsByPage(ctx context.Context, request mcp.ListToolsRequest) (*catalogToolsPage, error) {
 	response, err := c.client.GetTransport().SendRequest(ctx, mcptransport.JSONRPCRequest{
 		JSONRPC: mcp.JSONRPC_VERSION,
-		ID:      mcp.NewRequestId(fmt.Sprintf("capscope-inventory-%d", c.requestID.Add(1))),
+		ID:      mcp.NewRequestId(fmt.Sprintf("tappet-inventory-%d", c.requestID.Add(1))),
 		Method:  "tools/list",
 		Params:  request.Params,
 		Header:  request.Header,
@@ -317,7 +317,7 @@ func fetchToolsFromServerWithLimits(ctx context.Context, name string, providerCo
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "capscope-structure-generator",
+		Name:    "tappet-structure-generator",
 		Version: "0.1.0",
 	}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
@@ -403,7 +403,7 @@ func exceedsInventoryLimit(current, additional, limit int) bool {
 }
 
 func newCatalogConnection(name string, providerConfig *config.MCPClientConfigV2) (catalogConnection, error) {
-	mcpClient, err := capscopeclient.NewMCPClientWithResponseLimit(name, providerConfig, maxInventoryPageBytes)
+	mcpClient, err := tappetclient.NewMCPClientWithResponseLimit(name, providerConfig, maxInventoryPageBytes)
 	if err != nil {
 		return catalogConnection{}, err
 	}

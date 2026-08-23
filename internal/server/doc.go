@@ -1,2 +1,2 @@
-// Package server constructs and serves the outward CapScope MCP server.
+// Package server constructs and serves the outward Tappet MCP server.
 package server

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/tappet/internal/config"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -62,7 +62,7 @@ func TestProviderLifecycleIsLazyAndReusable(t *testing.T) {
 		return mcp.NewToolResultText("ok"), nil
 	}))
 
-	assert.Empty(t, recorder.snapshot(), "loading CapScope must not start a provider")
+	assert.Empty(t, recorder.snapshot(), "loading Tappet must not start a provider")
 	_, err := h.HandleGetToolsInCategory("alpha.nested")
 	require.NoError(t, err)
 	assert.Empty(t, recorder.snapshot(), "browsing must not start a provider")
@@ -685,7 +685,7 @@ func recordingFactory(recorder *lifecycleRecorder, handler mcpserver.ToolHandler
 		}
 		initRequest := mcp.InitializeRequest{}
 		initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-		initRequest.Params.ClientInfo = mcp.Implementation{Name: "capscope-test"}
+		initRequest.Params.ClientInfo = mcp.Implementation{Name: "tappet-test"}
 		if _, err := c.Initialize(ctx, initRequest); err != nil {
 			return nil, err
 		}

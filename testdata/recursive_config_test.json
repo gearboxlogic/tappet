@@ -2,7 +2,7 @@
   "mcpProxy": {
     "baseURL": "http://localhost",
     "addr": ":9999",
-    "name": "CapScope",
+    "name": "Tappet",
     "version": "0.1.0",
     "type": "streamable-http",
     "options": {

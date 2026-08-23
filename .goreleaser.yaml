@@ -1,9 +1,9 @@
 version: 2
-project_name: capscope
+project_name: tappet
 builds:
-  - id: capscope
-    main: ./cmd/capscope
-    binary: capscope
+  - id: tappet
+    main: ./cmd/tappet
+    binary: tappet
     env:
       - CGO_ENABLED=0
     ldflags:
@@ -18,9 +18,9 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
-  - id: capscope-structure-generator
+  - id: tappet-structure-generator
     main: ./structure_generator/cmd
-    binary: capscope-structure-generator
+    binary: tappet-structure-generator
     env:
       - CGO_ENABLED=0
     ldflags:

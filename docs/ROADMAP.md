@@ -1,4 +1,4 @@
-# CapScope Roadmap
+# Tappet Roadmap
 
 Status: **proposed milestone plan**
 
@@ -6,14 +6,14 @@ The roadmap is ordered to prove the narrow capability problem before expanding t
 
 ## Milestone 0: Establish an honest baseline
 
-Outcome: the repository can be changed safely without confusing inherited Lazy MCP behavior with planned CapScope behavior.
+Outcome: the repository can be changed safely without confusing inherited Lazy MCP behavior with planned Tappet behavior.
 
 Work:
 
 - add architecture and agent guidance
 - inventory current behavior with characterization tests
 - restore or retire `.skip` tests deliberately
-- rename module, imports, binaries, and docs from Lazy MCP to CapScope
+- rename module, imports, binaries, and docs from Lazy MCP to Tappet
 - establish upstream attribution and license notices
 - add CI for tests, race detection, vet, formatting, and static analysis
 - record current tool-surface and server-construction benchmarks
@@ -33,7 +33,7 @@ Exit criteria:
 
 ## Milestone 1: Modern MCP foundation
 
-Outcome: CapScope can serve a modern fixed broker surface and communicate with modern and legacy downstream providers.
+Outcome: Tappet can serve a modern fixed broker surface and communicate with modern and legacy downstream providers.
 
 Work:
 
@@ -66,7 +66,7 @@ Exit criteria:
 
 ## Milestone 2: Capability package and registry
 
-Outcome: CapScope loads validated capability packages instead of treating hierarchy JSON as the domain model.
+Outcome: Tappet loads validated capability packages instead of treating hierarchy JSON as the domain model.
 
 Work:
 
@@ -206,15 +206,15 @@ Exit criteria:
 
 ## Milestone 5: Portable broker vertical slice
 
-Outcome: one unmodified MCP harness completes real tasks through a fixed small CapScope surface.
+Outcome: one unmodified MCP harness completes real tasks through a fixed small Tappet surface.
 
 Candidate broker API:
 
 ```text
-capscope.search
-capscope.describe
-capscope.read
-capscope.invoke
+tappet.search
+tappet.describe
+tappet.read
+tappet.invoke
 ```
 
 The fixed tool surface is accompanied by the scoped MCP `resources/read` proxy

@@ -1,4 +1,4 @@
-# CapScope Architecture
+# Tappet Architecture
 
 Status: **accepted direction; interfaces remain V1-alpha proposals**
 
@@ -15,7 +15,7 @@ Agent harnesses commonly treat configured capabilities as permanently model-visi
 - more irrelevant authority appearing in the model's apparent action space
 - architecture tied to one harness's tool-loading behavior
 
-CapScope separates four states that most harnesses currently conflate:
+Tappet separates four states that most harnesses currently conflate:
 
 ```text
 installed
@@ -28,7 +28,7 @@ Only the subset needed for the current work should advance through those states.
 
 ## 2. Scope
 
-CapScope is a progressive capability catalog, materializer, and provider broker.
+Tappet is a progressive capability catalog, materializer, and provider broker.
 
 It is not:
 
@@ -98,9 +98,9 @@ match explanation.
 
 ### 3.3 Skill
 
-A skill is procedural knowledge using the Agent Skills format. CapScope should index only the `name` and `description` for discovery, return the complete `SKILL.md` only when requested, and return supporting resources individually.
+A skill is procedural knowledge using the Agent Skills format. Tappet should index only the `name` and `description` for discovery, return the complete `SKILL.md` only when requested, and return supporting resources individually.
 
-CapScope does not execute bundled scripts by default. It may expose them as references to a harness that already has an execution tool.
+Tappet does not execute bundled scripts by default. It may expose them as references to a harness that already has an execution tool.
 
 The Agent Skills `allowed-tools` field is experimental and must not be interpreted as an authorization grant.
 
@@ -141,7 +141,7 @@ The provider manager owns process and connection lifecycle, cached metadata, tra
 
 ## 4. Two runtime modes
 
-CapScope must distinguish portable broker behavior from native harness integration.
+Tappet must distinguish portable broker behavior from native harness integration.
 
 ### 4.1 Broker mode: portable baseline
 
@@ -150,7 +150,7 @@ Unmodified MCP harness
         |
         | fixed, small MCP tool surface
         v
-CapScope broker
+Tappet broker
         |
         +-- catalog / resolver
         +-- materializer
@@ -163,10 +163,10 @@ Downstream MCP providers
 The model sees a small stable API, proposed as:
 
 ```text
-capscope.search
-capscope.describe
-capscope.read
-capscope.invoke
+tappet.search
+tappet.describe
+tappet.read
+tappet.invoke
 ```
 
 Exact names and schemas remain alpha until tested.
@@ -199,7 +199,7 @@ Harness adapter
      +-- native tool binding
      +-- skill/context injection
      v
-CapScope core library
+Tappet core library
 ```
 
 Native adapter mode is optional and client-specific. It must reuse the same registry, resolver, package, provider, and observability contracts as broker mode.
@@ -210,7 +210,7 @@ These terms must be precise.
 
 ### Broker mode
 
-Activation means that CapScope materializes and returns selected capability data. Unloading can release provider resources and stop repeating capability data, but it cannot remove tokens already present in the conversation.
+Activation means that Tappet materializes and returns selected capability data. Unloading can release provider resources and stop repeating capability data, but it cannot remove tokens already present in the conversation.
 
 ### Native adapter mode
 
@@ -220,7 +220,7 @@ Activation may update the harness's future tool and context projection. Deactiva
 
 A subagent or new context can provide the strongest isolation: capability material exists only in that context and the parent receives a compact result.
 
-CapScope core should not claim literal context deletion unless a tested adapter provides it.
+Tappet core should not claim literal context deletion unless a tested adapter provides it.
 
 ## 6. Components
 
@@ -300,7 +300,7 @@ The materializer is deterministic and side-effect free.
 
 ### 6.5 MCP broker adapter
 
-The broker adapter exposes the fixed CapScope tools and translates calls into core operations.
+The broker adapter exposes the fixed Tappet tools and translates calls into core operations.
 
 It should:
 
@@ -313,7 +313,7 @@ It should:
 
 #### 6.5.1 Bounded materialization and invocation results
 
-Every broker response has a finite encoded-size limit. CapScope must never
+Every broker response has a finite encoded-size limit. Tappet must never
 silently truncate or flatten a schema, skill, reference, or provider result.
 
 Skills, references, and cached operation schemas have stable artifact
@@ -336,7 +336,7 @@ The lease survives reinstall, uninstall, and metadata refresh. It has a
 five-minute idle timeout and a one-hour absolute lifetime; each successful
 non-final chunk renews only the idle deadline.
 
-Before exposing any chunk, CapScope atomically commits an exact response replay
+Before exposing any chunk, Tappet atomically commits an exact response replay
 in the lease's single replaceable replay slot. Repeating the same input
 reference, offset, and `max_bytes` returns that byte-identical response without
 renewing its deadline. For the first incomplete read, an atomic mapping from the
@@ -371,17 +371,17 @@ capacity cannot be reserved. These are explicit application handles independent
 of the broker transport or MCP protocol session.
 
 An inline `invoke` result keeps the downstream MCP result at the outer protocol
-level. CapScope forwards every provider content block in the outer
+level. Tappet forwards every provider content block in the outer
 `CallToolResult.Content`; text, image, audio, and embedded-resource blocks remain
 unchanged. A resource-link block keeps its name, title, description, media type,
 and annotations, but its provider-scoped URI is rewritten to the resolvable
-broker URI defined in section 6.5.3. CapScope also preserves
+broker URI defined in section 6.5.3. Tappet also preserves
 `StructuredContent` and `IsError`.
-For inline results, CapScope copies every provider-defined `_meta` entry to the
+For inline results, Tappet copies every provider-defined `_meta` entry to the
 same top-level key so unmodified consumers keep seeing the metadata paths they
 expect. Broker fields use the reserved envelope
-`_meta["io.capscope.proxy"]`. If and only if the provider already used that
-exact reserved key, CapScope stores its original value unchanged under
+`_meta["io.tappet.proxy"]`. If and only if the provider already used that
+exact reserved key, Tappet stores its original value unchanged under
 `downstream_reserved_value` inside the proxy envelope; no other downstream key
 is moved or wrapped.
 
@@ -391,8 +391,8 @@ is moved or wrapped.
   "structuredContent": {"provider": "value"},
   "isError": false,
   "_meta": {
-    "capscope": {"provider_owned": true},
-    "io.capscope.proxy": {
+    "tappet": {"provider_owned": true},
+    "io.tappet.proxy": {
       "invocation": {
         "invocation_id": "invocation:opaque-id",
         "disposition": "inline"
@@ -409,15 +409,15 @@ two different values at the same key; all noncolliding provider metadata keeps
 its original protocol-visible path.
 
 If the complete typed provider result exceeds the inline limit but remains
-within the accepted result limit, CapScope stores a lossless UTF-8 JSON encoding
+within the accepted result limit, Tappet stores a lossless UTF-8 JSON encoding
 in a temporary spill object. `invoke` preserves the provider's outer `IsError`
 classification and returns compact spill metadata in
-`_meta["io.capscope.proxy"].invocation` and structured content. The complete
+`_meta["io.tappet.proxy"].invocation` and structured content. The complete
 broker-adapted typed result, including the provider `_meta` object at its
 original keys and any scoped resource-link rewrites, exists only inside the
 lossless spill. No provider metadata is copied into the spilled outer response
 because it may itself be what exceeded the inline limit. The outer content
-contains only a bounded notice directing the caller to `capscope.read`; it never
+contains only a bounded notice directing the caller to `tappet.read`; it never
 presents a partial provider content array as complete:
 
 ```json
@@ -478,9 +478,9 @@ or publication failure after a provider `CallToolResult` has arrived.
 
 A downstream JSON-RPC error is not an MCP `CallToolResult` and follows the same
 bounded-preservation rule separately. When the complete encoded error object
-fits the broker response limit, CapScope forwards its numeric `code`, `message`,
+fits the broker response limit, Tappet forwards its numeric `code`, `message`,
 and structured `data` unchanged. When it exceeds the inline limit but fits the
-accepted downstream frame and spill limits, CapScope stores a lossless encoding
+accepted downstream frame and spill limits, Tappet stores a lossless encoding
 of those three original fields in an error spill. The bounded outward JSON-RPC
 error retains the original numeric code, uses the fixed message
 `Downstream error payload spilled`, and puts only this broker envelope in
@@ -488,7 +488,7 @@ error retains the original numeric code, uses the fixed message
 
 ```json
 {
-  "io.capscope.proxy": {
+  "io.tappet.proxy": {
     "disposition": "spilled_error",
     "error_ref": "error:opaque-handle",
     "media_type": "application/json",
@@ -499,14 +499,14 @@ error retains the original numeric code, uses the fixed message
 }
 ```
 
-`capscope.read` retrieves that error reference in bounded chunks; reassembly
+`tappet.read` retrieves that error reference in bounded chunks; reassembly
 restores the exact original code, message, and data. The outer envelope never
 copies a partial provider `data` value or truncates the provider message. If
-error-spill admission fails, CapScope returns the distinct bounded
+error-spill admission fails, Tappet returns the distinct bounded
 `downstream_error_spill_failed` proxy error and does not pretend the original
 error was preserved. Its bounded data still records
 `provider_call_state: "completed"`, `provider_error_received: true`, and
-`retry_safe: false`, because CapScope received the provider's terminal JSON-RPC
+`retry_safe: false`, because Tappet received the provider's terminal JSON-RPC
 error even though it could not preserve the full payload. MCP results with
 `isError: true` remain typed `CallToolResult` values and use the ordinary result
 path above.
@@ -588,7 +588,7 @@ JSON-RPC error data before any typed SDK model can round a value. An adapter
 that can expose these values only through `map[string]interface{}` values
 decoded as `float64` cannot provide the V1 lossless invocation path.
 
-An oversized inbound message invalidates the affected transport. CapScope may
+An oversized inbound message invalidates the affected transport. Tappet may
 emit a bounded `broker_frame_limit_exceeded` response when the framing still
 permits it, but then closes the connection or session before accepting another
 request. In particular, a newline-delimited stdio server exits or closes its
@@ -628,22 +628,22 @@ V1-alpha maxima requires an explicit architecture and benchmark update.
 
 A downstream `resource-link` URI is scoped to the provider connection that
 returned it; forwarding that URI without a read route would create a dangling
-link. Before publishing an invocation result containing such a block, CapScope
+link. Before publishing an invocation result containing such a block, Tappet
 uses that same initialized provider session to call downstream
 `resources/read`. It accepts at most 32 links per result, snapshots each complete
 typed resource response under finite per-resource and aggregate byte quotas,
 and stages all snapshot capacity before returning the tool result.
 The block URI is then rewritten to an unguessable
-`capscope-resource://<opaque-handle>` URI. All other block fields remain
-unchanged. Before computing the snapshot encoding or digest, CapScope also
+`tappet-resource://<opaque-handle>` URI. All other block fields remain
+unchanged. Before computing the snapshot encoding or digest, Tappet also
 rewrites every standard `ResourceContents.uri` field in the downstream
 `resources/read` response to that broker URI, or to an opaque child URI backed
 by the same snapshot. Other typed resource-content fields remain unchanged.
 The original provider URI and any provider-originated nested content URI exist
 only in bounded transient call state
-while CapScope performs `resources/read`; they are treated as possible signed or
+while Tappet performs `resources/read`; they are treated as possible signed or
 credential-bearing secrets and are excluded from telemetry. After the read
-completes or fails, CapScope discards every plaintext provider URI. Neither the
+completes or fails, Tappet discards every plaintext provider URI. Neither the
 typed snapshot nor its stored encoding retains one. The snapshot record retains
 only an irreversible keyed digest of the requested provider URI for correlation,
 plus the provider fingerprint, content digest, and invocation ID. The digest is
@@ -651,14 +651,14 @@ never accepted as a read route and stale checks do not require the original URI.
 
 On the successful result path, resource snapshots, the fully adapted result
 encoding, and any required result spill are one publication transaction.
-CapScope commits the resource handles and result-spill handle together only
+Tappet commits the resource handles and result-spill handle together only
 after every link has been materialized and the final bounded response or spill
 has been prepared. Any failure before that commit aborts the success transaction
 and releases every staged resource snapshot, object slot, and byte reservation;
 no unreachable resource object remains charged against quota.
 
 If a downstream `resources/read` failure needs an error spill for its structured
-cause, CapScope first aborts that success transaction. It then admits and commits
+cause, Tappet first aborts that success transaction. It then admits and commits
 an independent error-only spill transaction and returns its `error_ref` only
 after that commit succeeds. The error transaction never commits staged resource
 handles or a result spill. If error-spill admission fails, the preservation
@@ -702,7 +702,7 @@ preservation `CallToolResult` has `IsError: true`, but that broker classificatio
 does not replace the separately recorded provider value or describe the
 provider operation as failed or outcome-unknown. It does not emit a dangling
 rewritten link, a partial resource snapshot, or a provider URI that the
-CapScope-connected harness cannot resolve. This scoped proxy does not expose a
+Tappet-connected harness cannot resolve. This scoped proxy does not expose a
 provider-wide resource catalog and does not add dynamic tools; implementing it
 belongs to the portable broker milestone, not Milestone 0.
 
@@ -829,7 +829,7 @@ without argument payloads.
 V1 never automatically retries a downstream `tools/call` after any request byte
 has been handed to the transport. A timeout, cancellation, connection loss, or
 frame failure after that point can mean the provider executed the operation but
-its result was lost. CapScope closes or repairs the connection for future work
+its result was lost. Tappet closes or repairs the connection for future work
 and returns a typed `provider_outcome_unknown` error containing bounded provider
 and invocation diagnostics; it does not replay the call. A call may be retried
 automatically only when failure is proven to have occurred before transmission.
@@ -859,7 +859,7 @@ An exceeded byte limit returns `provider_frame_limit_exceeded`; exceeded depth
 returns `provider_message_depth_exceeded`; exceeded node count returns
 `provider_message_node_limit_exceeded`. Any failure
 fails every affected in-flight request and closes the protocol connection.
-CapScope terminates a stdio child whose stream can no longer be trusted and
+Tappet terminates a stdio child whose stream can no longer be trusted and
 closes an HTTP or event stream session; it does not skip bytes or attempt
 in-place resynchronization. The prior atomic metadata-cache snapshot remains
 intact, but no further request is accepted until the provider manager
@@ -878,7 +878,7 @@ not create an independent unbounded queue.
 The reader may exert transport backpressure only while reserved capacity exists;
 it never waits indefinitely for an event consumer while continuing to retain
 new frames. Failure to reserve event capacity closes the provider connection
-and reports `provider_event_overflow`. CapScope terminates the stdio child or
+and reports `provider_event_overflow`. Tappet terminates the stdio child or
 closes the HTTP or event stream, cancels queued event work, and classifies every
 affected transmitted invocation through the ambiguous-delivery rules above.
 Unsupported callbacks are rejected within the same finite handler budget. Event
@@ -911,16 +911,16 @@ stopped provider must report the observation time, provider fingerprint, schema
 digest, and cached freshness state. Every provider connection or reconnection
 must refresh current metadata and schema digests before the first invocation is
 accepted, even when configuration and package bindings are unchanged. On a
-long-lived connection, CapScope may reuse that invocation contract only when
+long-lived connection, Tappet may reuse that invocation contract only when
 the provider advertised reliable tool-list change notifications on the active
 connection. The provider manager serializes notification handling with schema
 selection: a dirty notification before dispatch forces a bounded refresh and
-revalidation. Without that negotiated invalidation contract, CapScope performs
+revalidation. Without that negotiated invalidation contract, Tappet performs
 a bounded metadata refresh immediately before every invocation, then validates
 arguments against that result. A provider that advertises notifications but
 changes schemas without sending them violates its negotiated contract; the
 reported freshness state records which mode was used. If a digest changed,
-CapScope atomically replaces the snapshot and invalidates old schema references.
+Tappet atomically replaces the snapshot and invalidates old schema references.
 If refresh fails, invocation fails without calling the provider; known-stale
 metadata is never used as an invocation contract.
 
@@ -1001,10 +1001,10 @@ Use ordinary structured logs and OpenTelemetry-compatible traces rather than MCP
 Suggested spans:
 
 ```text
-capscope.search
-capscope.describe
-capscope.read
-capscope.invoke
+tappet.search
+tappet.describe
+tappet.read
+tappet.invoke
 provider.connect
 provider.discover
 provider.list_tools
@@ -1063,7 +1063,7 @@ handles follow this rule.
 
 Do not map an implicit client connection to hidden capability state.
 
-The first broker-mode vertical slice should remain stateless across CapScope
+The first broker-mode vertical slice should remain stateless across Tappet
 calls except for provider lifecycle, cache lifecycle, and bounded temporary
 retrieval through the explicit handles defined above. Introduce activation
 handles only after a tested requirement demonstrates their value.
@@ -1078,9 +1078,9 @@ model visibility
 provider permission
 ```
 
-CapScope may support an optional external filter hook that removes unavailable capabilities from a projection, but the hook is an integration point, not a policy engine.
+Tappet may support an optional external filter hook that removes unavailable capabilities from a projection, but the hook is an integration point, not a policy engine.
 
-Every invocation still reaches the provider's normal authorization boundary. CapScope must propagate permission failures accurately.
+Every invocation still reaches the provider's normal authorization boundary. Tappet must propagate permission failures accurately.
 
 ### 8.1 Broker transport access
 
@@ -1103,7 +1103,7 @@ inputs already accepted by current deployments:
 - provider command arguments or URLs that contain inline credentials
 - configuration-fetch headers supplied through the existing CLI
 
-These are grandfathered compatibility inputs, not a CapScope credential store.
+These are grandfathered compatibility inputs, not a Tappet credential store.
 Milestone 0 continues to load and pass them through unchanged. Configuration
 files and process arguments containing them must be treated as secrets; values
 are redacted from logs, diagnostics, traces, metrics, panic reports, and audit
@@ -1115,12 +1115,12 @@ secret location.
 Removing or migrating any grandfathered field requires a separate compatibility
 decision, tests for existing stdio, SSE, Streamable HTTP, outward HTTP, and
 remote-configuration deployments, plus migration guidance toward environment or
-external secret injection. CapScope does not grow this compatibility path into
+external secret injection. Tappet does not grow this compatibility path into
 credential lifecycle management, IAM, or policy.
 
 ## 9. Latest MCP strategy
 
-The outward CapScope server should target the latest stable MCP revision and retain reasonable compatibility with legacy clients.
+The outward Tappet server should target the latest stable MCP revision and retain reasonable compatibility with legacy clients.
 
 For MCP 2026-07-28, account for:
 
@@ -1142,7 +1142,7 @@ Do not switch Go SDKs without a focused comparison. First test the current SDK l
 
 ### 9.1 Multi-round-trip requests
 
-CapScope must advertise downstream client capabilities only when its provider
+Tappet must advertise downstream client capabilities only when its provider
 adapter can service them. The portable V1 broker does not advertise sampling,
 elicitation, roots, or other provider-to-client callback capabilities and does
 not service them locally. If a provider sends an unnegotiated callback anyway,
@@ -1175,7 +1175,7 @@ Legacy `Client` lazy-tool activation and recursive hierarchy behavior overlap. T
 
 This proposal is intentionally small.
 
-### `capscope.search`
+### `tappet.search`
 
 Input:
 
@@ -1199,7 +1199,7 @@ stale-cursor error instead of skipping or duplicating branches. Card ranking and
 child pagination are independent, and the combined response remains subject to
 the broker response-size limit.
 
-### `capscope.describe`
+### `tappet.describe`
 
 Input:
 
@@ -1246,7 +1246,7 @@ cache-miss result defined in section 6.7. Full skill bodies remain deferred to
 IDs fail explicitly, and the schema selector count and total response size are
 bounded independently of structure pagination.
 
-### `capscope.read`
+### `tappet.read`
 
 Input:
 
@@ -1314,7 +1314,7 @@ bounded single-slot replay record defined in section 6.5.1. Retrying the exact
 input reference, offset, and `max_bytes` before its effective expiry returns the
 same response even if the first transport delivery was lost.
 
-### `capscope.invoke`
+### `tappet.invoke`
 
 Input:
 
@@ -1323,14 +1323,14 @@ Input:
   "capability_id": "software.github.ci-debugging",
   "operation_id": "inspect-failed-checks",
   "arguments": {
-    "repository": "gearboxlogic/capscope"
+    "repository": "gearboxlogic/tappet"
   }
 }
 ```
 
 Output: the provider's native MCP content blocks, structured content, and
-`isError` at the outer `CallToolResult` level when inline, with CapScope metadata
-under `_meta["io.capscope.proxy"].invocation` and all noncolliding provider
+`isError` at the outer `CallToolResult` level when inline, with Tappet metadata
+under `_meta["io.tappet.proxy"].invocation` and all noncolliding provider
 metadata at its original top-level `_meta` keys. An oversized accepted result
 returns only bounded proxy metadata plus the spill reference defined in section
 6.5.1; retrieving and decoding the spill restores the complete original result,

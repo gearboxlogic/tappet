@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"

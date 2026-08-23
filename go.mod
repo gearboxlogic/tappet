@@ -1,4 +1,4 @@
-module github.com/gearboxlogic/capscope
+module github.com/gearboxlogic/tappet
 
 go 1.24.0
 

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-image=${1:-capscope:smoke}
+image=${1:-tappet:smoke}
 container_engine=${CONTAINER_ENGINE:-docker}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
@@ -55,7 +55,7 @@ if [[ "$initialized" != "true" ]]; then
   echo "container did not accept an MCP initialize request" >&2
   exit 1
 fi
-grep -q '"name":"CapScope"' "$initialize_response"
+grep -q '"name":"Tappet"' "$initialize_response"
 
 tools_response="$response_dir/tools.json"
 curl --fail --silent --show-error --max-time 5 \

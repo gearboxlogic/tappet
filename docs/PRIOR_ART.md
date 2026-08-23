@@ -4,9 +4,9 @@ Status: **research record, not an endorsement of every project design**
 
 Research date: **2026-08-23**
 
-This document records source-backed mechanisms that CapScope can reuse or learn from. Links point to authoritative project repositories, specifications, or tracked source behavior.
+This document records source-backed mechanisms that Tappet can reuse or learn from. Links point to authoritative project repositories, specifications, or tracked source behavior.
 
-## 1. Current CapScope repository
+## 1. Current Tappet repository
 
 Repository snapshot:
 
@@ -65,7 +65,7 @@ Change:
 - separate provider lifecycle from protocol state
 - preserve structured results
 - modernize MCP
-- avoid turning permission hooks into a CapScope authorization system
+- avoid turning permission hooks into a Tappet authorization system
 
 ## 3. Pi MCP Adapter
 
@@ -104,7 +104,7 @@ Do not copy as core:
 - one-session-per-process assumptions
 - harness-specific direct tool registration
 
-CapScope should implement the reusable lifecycle and cache contracts in Go and expose Pi-like behavior through adapters later.
+Tappet should implement the reusable lifecycle and cache contracts in Go and expose Pi-like behavior through adapters later.
 
 ## 4. PMCP
 
@@ -146,7 +146,7 @@ Do not copy into V1:
 - broad policy engine
 - multi-tenant service scope
 
-PMCP demonstrates that the gateway can become a platform quickly. CapScope should deliberately remain narrower.
+PMCP demonstrates that the gateway can become a platform quickly. Tappet should deliberately remain narrower.
 
 ## 5. `mcp-shark/lazy-tool`
 
@@ -204,7 +204,7 @@ dynamic native tool lists are an optimization
 stable broker tools are the portability baseline
 ```
 
-CapScope should not depend on live tool-list changes for V1.
+Tappet should not depend on live tool-list changes for V1.
 
 ## 7. CrowdStrike Falcon MCP and other dynamic-mode servers
 
@@ -251,7 +251,7 @@ Do not copy:
 
 - the full LangGraph harness
 - subagents, memory, planning, dependency installation, or autonomous skill evolution
-- the assumption that CapScope itself owns the system prompt
+- the assumption that Tappet itself owns the system prompt
 
 DeerFlow supports the conclusion that true skill withdrawal belongs in a harness adapter, not a generic MCP broker.
 
@@ -263,13 +263,13 @@ Authoritative sources:
 - https://github.com/agentskills/agentskills
 - inspected specification blob `d9a2db099d905da8b879a5c6f996728073985279`
 
-The format already defines the progressive pattern CapScope needs:
+The format already defines the progressive pattern Tappet needs:
 
 1. metadata loaded for discovery
 2. complete `SKILL.md` loaded on activation
 3. references, scripts, and assets loaded only as needed
 
-Adopt the format rather than creating CapScope-specific skill Markdown.
+Adopt the format rather than creating Tappet-specific skill Markdown.
 
 Important constraints:
 
@@ -304,7 +304,7 @@ Relevant changes:
 - JSON Schema 2020-12 expectations
 - official versioned conformance suites
 
-CapScope implications:
+Tappet implications:
 
 - fixed outward broker tools fit stateless request handling when responses remain inline; process-local spill handles require additional deployment constraints
 - hidden client-to-capability session mapping should be avoided
@@ -318,7 +318,7 @@ CapScope implications:
 
 ### Current dependency: `mark3labs/mcp-go`
 
-Current CapScope version: `v0.43.2`.
+Current Tappet version: `v0.43.2`.
 
 The project merged 2026-07-28 support in commit:
 
@@ -381,7 +381,7 @@ IONOS dynamic mode, Pi MCP Adapter, PMCP, Lazy MCP, and `lazy-tool` provide veri
 
 ## 14. Synthesis
 
-| Concern | Primary inspiration | CapScope decision |
+| Concern | Primary inspiration | Tappet decision |
 | --- | --- | --- |
 | Tiny portable surface | Lazy MCP | fixed broker mode |
 | Hierarchy | Lazy MCP | capability paths, no inheritance |
@@ -393,5 +393,5 @@ IONOS dynamic mode, Pi MCP Adapter, PMCP, Lazy MCP, and `lazy-tool` provide veri
 | Dynamic direct tools | Pi, IONOS | optional client adapter |
 | Capability cards | PMCP | compact discovery result |
 | Modern protocol | MCP spec, Go SDKs | latest outward server plus legacy fallback |
-| Authority | provider systems | explicitly outside CapScope core |
+| Authority | provider systems | explicitly outside Tappet core |
 | Context deletion | harness/fresh context | never claim in generic broker mode |

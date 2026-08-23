@@ -16,7 +16,7 @@
 
 ## Outward tools
 
-CapScope currently exposes exactly two tools.
+Tappet currently exposes exactly two tools.
 
 ### `get_tools_in_category`
 
@@ -43,11 +43,11 @@ Input:
 }
 ```
 
-CapScope resolves the exact path, starts and initializes the mapped provider if needed, calls the mapped downstream tool, and returns its MCP result. It reuses that provider until shutdown.
+Tappet resolves the exact path, starts and initializes the mapped provider if needed, calls the mapped downstream tool, and returns its MCP result. It reuses that provider until shutdown.
 
 Calls to one provider are serialized. Calls to different providers may overlap. Each invocation has a 30-second deadline covering lazy provider startup, initialization, time spent waiting for the same-provider lock, and the downstream call. A provider's connection and ping task use a separate registry lifecycle context, so canceling the request that first starts an SSE provider does not terminate the cached provider.
 
-When a downstream call returns an error and the generated hierarchy contains an input schema, CapScope appends that schema as a diagnostic. An MCP result with `isError: true` remains an MCP result, and structured content is preserved.
+When a downstream call returns an error and the generated hierarchy contains an input schema, Tappet appends that schema as a diagnostic. An MCP result with `isError: true` remains an MCP result, and structured content is preserved.
 
 ## HTTP authentication
 

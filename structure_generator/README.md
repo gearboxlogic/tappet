@@ -1,10 +1,10 @@
-# CapScope structure generator
+# Tappet structure generator
 
-`capscope-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a CapScope configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It expands environment placeholders in provider commands, arguments, environment values, URLs, and header values.
+`tappet-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a Tappet configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It expands environment placeholders in provider commands, arguments, environment values, URLs, and header values.
 
 ```bash
 make build
-./build/capscope-structure-generator \
+./build/tappet-structure-generator \
   --config config.json \
   --output testdata/mcp_hierarchy
 ```
@@ -22,7 +22,7 @@ Each tool leaf keeps its input schema, optional output schema, annotations, down
 Package use:
 
 ```go
-import generator "github.com/gearboxlogic/capscope/structure_generator"
+import generator "github.com/gearboxlogic/tappet/structure_generator"
 ```
 
 This generator produces the inherited hierarchy format. It does not produce capability packages.

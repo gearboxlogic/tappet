@@ -2,7 +2,7 @@
   "mcpProxy": {
     "baseURL": "http://localhost",
     "addr": ":9090",
-    "name": "CapScope",
+    "name": "Tappet",
     "version": "0.1.0",
     "type": "stdio",
     "hierarchyPath": "testdata/mcp_hierarchy"

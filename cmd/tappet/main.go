@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/gearboxlogic/capscope/internal/config"
-	"github.com/gearboxlogic/capscope/internal/server"
+	"github.com/gearboxlogic/tappet/internal/config"
+	"github.com/gearboxlogic/tappet/internal/server"
 )
 
 var BuildVersion = "dev"

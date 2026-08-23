@@ -1,10 +1,10 @@
-# CapScope Agent Guide
+# Tappet Agent Guide
 
 This file contains durable instructions for agents and contributors working in this repository. Task-specific prompts, temporary branch scope, and one-off research directions do not belong here.
 
 ## Mission
 
-CapScope reduces agent context pollution by progressively discovering and materializing coherent capabilities instead of exposing every installed tool schema, skill, and reference to every model call.
+Tappet reduces agent context pollution by progressively discovering and materializing coherent capabilities instead of exposing every installed tool schema, skill, and reference to every model call.
 
 A capability is a dynamically discoverable package containing some combination of:
 
@@ -13,7 +13,7 @@ A capability is a dynamically discoverable package containing some combination o
 - selectively readable context or reference material
 - provider bindings
 
-CapScope is not a general agent framework.
+Tappet is not a general agent framework.
 
 ## Current implementation status
 
@@ -24,9 +24,9 @@ Verified current behavior:
 - the public MCP surface consists of `get_tools_in_category` and `execute_tool`
 - tool hierarchy data is stored as generated JSON files
 - downstream MCP servers start lazily on first invocation
-- downstream clients remain open until CapScope exits
+- downstream clients remain open until Tappet exits
 - the unused provider-level `activate_<provider>` lazy-loading path has been retired; the shipped recursive hierarchy broker is the only lazy invocation path
-- the module path is `github.com/gearboxlogic/capscope` and shipped binaries use CapScope names
+- the module path is `github.com/gearboxlogic/tappet` and shipped binaries use Tappet names
 - the MCP dependency is `github.com/mark3labs/mcp-go v0.43.2`
 - downstream initialization uses the legacy MCP initialize handshake
 - stdio and HTTP transports share one outward server constructor
@@ -46,7 +46,7 @@ When a proposed change conflicts with an accepted boundary in those documents, u
 
 ## Accepted initial boundaries
 
-CapScope owns:
+Tappet owns:
 
 - capability registration and validation
 - compact capability discovery
@@ -57,7 +57,7 @@ CapScope owns:
 - portable broker-mode MCP exposure
 - observability of its own routing and provider actions
 
-CapScope does not own:
+Tappet does not own:
 
 - provider authentication or identity issuance
 - authorization, RBAC, ABAC, or production policy
@@ -131,7 +131,7 @@ Use these terms consistently:
 
 ## Scope discipline
 
-A change belongs in the initial CapScope core only when it is necessary to:
+A change belongs in the initial Tappet core only when it is necessary to:
 
 1. discover a capability,
 2. materialize only the needed skills, references, and operation metadata,
@@ -195,6 +195,6 @@ Keep in the initiating prompt or issue:
 
 ## Definition of a successful V1
 
-An unmodified MCP-capable harness can connect to CapScope and initially receive a small fixed broker surface regardless of the number of installed capabilities. It can find a relevant capability, load only the needed skill or reference material, inspect only the relevant operation schema, invoke the operation through a lazily managed MCP provider, and receive a faithful typed result.
+An unmodified MCP-capable harness can connect to Tappet and initially receive a small fixed broker surface regardless of the number of installed capabilities. It can find a relevant capability, load only the needed skill or reference material, inspect only the relevant operation schema, invoke the operation through a lazily managed MCP provider, and receive a faithful typed result.
 
 V1 does not require native dynamic tool binding, literal deletion of prior model context, an IAM system, or support for providers other than MCP.

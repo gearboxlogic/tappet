@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gearboxlogic/capscope/internal/config"
-	"github.com/gearboxlogic/capscope/internal/hierarchy"
+	"github.com/gearboxlogic/tappet/internal/config"
+	"github.com/gearboxlogic/tappet/internal/hierarchy"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -75,7 +75,7 @@ func recoverMiddleware(prefix string) MiddlewareFunc {
 	}
 }
 
-// ServerDependencies are the runtime objects shared by every CapScope transport.
+// ServerDependencies are the runtime objects shared by every Tappet transport.
 type ServerDependencies struct {
 	Hierarchy  *hierarchy.Hierarchy
 	Registry   *hierarchy.ServerRegistry
@@ -84,8 +84,8 @@ type ServerDependencies struct {
 	LogEnabled bool
 }
 
-// NewCapScopeServer constructs the transport-independent outward MCP server.
-func NewCapScopeServer(deps ServerDependencies) (*server.MCPServer, error) {
+// NewTappetServer constructs the transport-independent outward MCP server.
+func NewTappetServer(deps ServerDependencies) (*server.MCPServer, error) {
 	if deps.Hierarchy == nil {
 		return nil, errors.New("hierarchy is required")
 	}
@@ -187,7 +187,7 @@ func loadServer(cfg *config.Config) (*server.MCPServer, *hierarchy.ServerRegistr
 	}
 	registry := hierarchy.NewServerRegistry(cfg.McpServers)
 	logEnabled := cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false)
-	mcpServer, err := NewCapScopeServer(ServerDependencies{
+	mcpServer, err := NewTappetServer(ServerDependencies{
 		Hierarchy:  h,
 		Registry:   registry,
 		Name:       cfg.McpProxy.Name,
@@ -208,7 +208,7 @@ func StartStdioServer(cfg *config.Config) error {
 		return err
 	}
 	defer registry.Close()
-	log.Printf("Starting CapScope (stdio server)")
+	log.Printf("Starting Tappet (stdio server)")
 	return server.ServeStdio(mcpServer)
 }
 
@@ -243,9 +243,9 @@ func StartHTTPServer(cfg *config.Config) error {
 
 	// Apply middleware
 	middlewares := make([]MiddlewareFunc, 0)
-	middlewares = append(middlewares, recoverMiddleware("capscope"))
+	middlewares = append(middlewares, recoverMiddleware("tappet"))
 	if cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false) {
-		middlewares = append(middlewares, loggerMiddleware("capscope"))
+		middlewares = append(middlewares, loggerMiddleware("tappet"))
 	}
 	if cfg.McpProxy.Options != nil && len(cfg.McpProxy.Options.AuthTokens) > 0 {
 		middlewares = append(middlewares, newAuthMiddleware(cfg.McpProxy.Options.AuthTokens))
@@ -262,7 +262,7 @@ func StartHTTPServer(cfg *config.Config) error {
 	}
 
 	go func() {
-		log.Printf("Starting CapScope (%s server)", cfg.McpProxy.Type)
+		log.Printf("Starting Tappet (%s server)", cfg.McpProxy.Type)
 		log.Printf("%s server listening on %s", cfg.McpProxy.Type, cfg.McpProxy.Addr)
 		hErr := httpServer.ListenAndServe()
 		if hErr != nil && !errors.Is(hErr, http.ErrServerClosed) {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -19,21 +19,21 @@ import (
 )
 
 func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
-	t.Setenv("CAPSCOPE_GENERATOR_MODE", "serve")
-	t.Setenv("CAPSCOPE_GENERATOR_COMMAND", "fixture")
-	t.Setenv("CAPSCOPE_GENERATOR_HOST", "provider.invalid")
-	t.Setenv("CAPSCOPE_GENERATOR_TOKEN", "fixture-token")
+	t.Setenv("TAPPET_GENERATOR_MODE", "serve")
+	t.Setenv("TAPPET_GENERATOR_COMMAND", "fixture")
+	t.Setenv("TAPPET_GENERATOR_HOST", "provider.invalid")
+	t.Setenv("TAPPET_GENERATOR_TOKEN", "fixture-token")
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"stdio-provider": {
 			TransportType: config.MCPClientTypeStdio,
-			Command:       "${CAPSCOPE_GENERATOR_COMMAND}",
-			Args:          []string{"--${CAPSCOPE_GENERATOR_MODE}"},
-			Env:           map[string]string{"TOKEN": "${CAPSCOPE_GENERATOR_TOKEN}"},
+			Command:       "${TAPPET_GENERATOR_COMMAND}",
+			Args:          []string{"--${TAPPET_GENERATOR_MODE}"},
+			Env:           map[string]string{"TOKEN": "${TAPPET_GENERATOR_TOKEN}"},
 		},
 		"streamable-provider": {
 			TransportType: config.MCPClientTypeStreamable,
-			URL:           "https://${CAPSCOPE_GENERATOR_HOST}/mcp",
-			Headers:       map[string]string{"Authorization": "Bearer ${CAPSCOPE_GENERATOR_TOKEN}"},
+			URL:           "https://${TAPPET_GENERATOR_HOST}/mcp",
+			Headers:       map[string]string{"Authorization": "Bearer ${TAPPET_GENERATOR_TOKEN}"},
 		},
 	}})
 
@@ -222,16 +222,16 @@ func TestFetchFromConfigRejectsPartialInventory(t *testing.T) {
 }
 
 func TestFetchFromConfigPassesStdioEnvironment(t *testing.T) {
-	t.Setenv("CAPSCOPE_GENERATOR_COMMAND", os.Args[0])
-	t.Setenv("CAPSCOPE_GENERATOR_CONFIGURED_VALUE", "configured-value")
+	t.Setenv("TAPPET_GENERATOR_COMMAND", os.Args[0])
+	t.Setenv("TAPPET_GENERATOR_CONFIGURED_VALUE", "configured-value")
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"environment-fixture": {
 			TransportType: config.MCPClientTypeStdio,
-			Command:       "${CAPSCOPE_GENERATOR_COMMAND}",
+			Command:       "${TAPPET_GENERATOR_COMMAND}",
 			Args:          []string{"-test.run=^TestGeneratorStdioProvider$"},
 			Env: map[string]string{
-				"CAPSCOPE_GENERATOR_FIXTURE": "enabled",
-				"CAPSCOPE_GENERATOR_VALUE":   "${CAPSCOPE_GENERATOR_CONFIGURED_VALUE}",
+				"TAPPET_GENERATOR_FIXTURE": "enabled",
+				"TAPPET_GENERATOR_VALUE":   "${TAPPET_GENERATOR_CONFIGURED_VALUE}",
 			},
 		},
 	}})
@@ -271,14 +271,14 @@ func TestFetchFromConfigSupportsStreamableHTTPHeaders(t *testing.T) {
 		handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(server.Close)
-	t.Setenv("CAPSCOPE_GENERATOR_URL", server.URL)
-	t.Setenv("CAPSCOPE_GENERATOR_AUTH", "configured-token")
+	t.Setenv("TAPPET_GENERATOR_URL", server.URL)
+	t.Setenv("TAPPET_GENERATOR_AUTH", "configured-token")
 
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"streamable-fixture": {
 			TransportType: config.MCPClientTypeStreamable,
-			URL:           "${CAPSCOPE_GENERATOR_URL}",
-			Headers:       map[string]string{"Authorization": "Bearer ${CAPSCOPE_GENERATOR_AUTH}"},
+			URL:           "${TAPPET_GENERATOR_URL}",
+			Headers:       map[string]string{"Authorization": "Bearer ${TAPPET_GENERATOR_AUTH}"},
 		},
 	}})
 
@@ -316,12 +316,12 @@ func TestConvertToolPreservesSchemaNumbersAndTopLevelTitle(t *testing.T) {
 }
 
 func TestGeneratorStdioProvider(t *testing.T) {
-	if os.Getenv("CAPSCOPE_GENERATOR_FIXTURE") != "enabled" {
+	if os.Getenv("TAPPET_GENERATOR_FIXTURE") != "enabled" {
 		return
 	}
 	fixture := mcpserver.NewMCPServer("generator-fixture", "test")
 	fixture.AddTool(
-		mcp.NewTool("environment_tool", mcp.WithDescription(os.Getenv("CAPSCOPE_GENERATOR_VALUE"))),
+		mcp.NewTool("environment_tool", mcp.WithDescription(os.Getenv("TAPPET_GENERATOR_VALUE"))),
 		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("ok"), nil
 		},

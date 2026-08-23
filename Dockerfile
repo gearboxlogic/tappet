@@ -19,6 +19,6 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     ln -s /usr/local/bin/node /usr/local/bin/nodejs
 
-COPY --from=builder /app/build/capscope /usr/local/bin/capscope
-ENTRYPOINT ["/usr/local/bin/capscope"]
+COPY --from=builder /app/build/tappet /usr/local/bin/tappet
+ENTRYPOINT ["/usr/local/bin/tappet"]
 CMD ["--config", "/config/config.json"]

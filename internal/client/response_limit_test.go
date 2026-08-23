@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
@@ -188,7 +188,7 @@ func TestLimitedStdioTransportRetainsInboundHandlersUntilStart(t *testing.T) {
 }
 
 func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {
-	if os.Getenv("CAPSCOPE_LIMIT_FIXTURE") == "1" {
+	if os.Getenv("TAPPET_LIMIT_FIXTURE") == "1" {
 		var request string
 		_, _ = fmt.Fscanln(os.Stdin, &request)
 		fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"payload\":\"%s\"}}\n", strings.Repeat("x", 256))
@@ -197,7 +197,7 @@ func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {
 
 	stdioTransport := newLimitedStdioTransport(
 		os.Args[0],
-		[]string{"CAPSCOPE_LIMIT_FIXTURE=1"},
+		[]string{"TAPPET_LIMIT_FIXTURE=1"},
 		[]string{"-test.run=^TestLimitedStdioTransportRejectsOversizeBeforeDecode$"},
 		128,
 	)

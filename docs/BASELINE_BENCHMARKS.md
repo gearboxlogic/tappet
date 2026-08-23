@@ -8,7 +8,7 @@ Run:
 
 ```bash
 go test ./internal/server -run '^$' \
-  -bench 'Benchmark(NewCapScopeServer|OutwardToolSurfaceEncoding)$' \
+  -bench 'Benchmark(NewTappetServer|OutwardToolSurfaceEncoding)$' \
   -benchmem -count=5
 ```
 
@@ -23,7 +23,7 @@ Median results from five runs:
 
 | Benchmark | Time | Heap bytes | Allocations | Fixed surface |
 | --- | ---: | ---: | ---: | ---: |
-| `BenchmarkNewCapScopeServer-32` | 1,136 ns/op | 4,932 B/op | 42 allocs/op | 2 tools |
+| `BenchmarkNewTappetServer-32` | 1,136 ns/op | 4,932 B/op | 42 allocs/op | 2 tools |
 | `BenchmarkOutwardToolSurfaceEncoding-32` | 6,018 ns/op | 4,617 B/op | 59 allocs/op | 2 tools, 1,095 JSON bytes |
 
 The values are a comparison baseline, not a performance budget. Re-run on the same host and Go toolchain when changing outward tool definitions or the shared constructor.

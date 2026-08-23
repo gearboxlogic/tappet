@@ -1,6 +1,6 @@
 services:
-  capscope:
-    image: ghcr.io/gearboxlogic/capscope:latest
+  tappet:
+    image: ghcr.io/gearboxlogic/tappet:latest
     pull_policy: always
     volumes:
       - ./config.docker.json:/config/config.json:ro

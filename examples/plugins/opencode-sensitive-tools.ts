@@ -4,7 +4,7 @@
  * Migrated from Claude Code PreToolUse hook:
  * - check-sensitive-tools.sh
  * 
- * Intercepts CapScope execute_tool calls and throws errors for
+ * Intercepts Tappet execute_tool calls and throws errors for
  * sensitive/public-facing actions (Gmail send, GitHub create PR, etc.)
  * 
  * In OpenCode, we can't show a permission dialog like Claude Code,
@@ -62,15 +62,15 @@ function matchesPattern(tool: string, pattern: string): boolean {
 
 export const SensitiveToolsCheckPlugin: Plugin = async ({ directory }) => {
   // Add custom patterns from environment
-  const envSensitive = process.env.CAPSCOPE_SENSITIVE_TOOLS?.split(",").filter(Boolean) || []
-  const envDenied = process.env.CAPSCOPE_DENIED_TOOLS?.split(",").filter(Boolean) || []
+  const envSensitive = process.env.TAPPET_SENSITIVE_TOOLS?.split(",").filter(Boolean) || []
+  const envDenied = process.env.TAPPET_DENIED_TOOLS?.split(",").filter(Boolean) || []
   
   const allSensitive = [...SENSITIVE_TOOLS, ...envSensitive]
   const allDenied = [...DENIED_TOOLS, ...envDenied]
 
   return {
     "tool.execute.before": async (input, output) => {
-      // Only intercept CapScope execute_tool calls
+      // Only intercept Tappet execute_tool calls
       if (input.tool !== "execute_tool") {
         return
       }
@@ -86,7 +86,7 @@ export const SensitiveToolsCheckPlugin: Plugin = async ({ directory }) => {
           throw new Error(
             `BLOCKED: Tool "${toolPath}" is blocked by security policy.\n` +
             `This action is not allowed. If you need to perform this action, ` +
-            `please do it manually or adjust CAPSCOPE_DENIED_TOOLS.`
+            `please do it manually or adjust TAPPET_DENIED_TOOLS.`
           )
         }
       }

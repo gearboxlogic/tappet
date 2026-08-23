@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gearboxlogic/capscope/internal/client"
-	"github.com/gearboxlogic/capscope/internal/config"
+	"github.com/gearboxlogic/tappet/internal/client"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -662,7 +662,7 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{Name: "capscope"}
+	initRequest.Params.ClientInfo = mcp.Implementation{Name: "tappet"}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
 	if _, err := mcpClient.GetClient().Initialize(ctx, initRequest); err != nil {
