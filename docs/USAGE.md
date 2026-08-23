@@ -57,4 +57,4 @@ When `options.authTokens` is non-empty, send:
 Authorization: Bearer <token>
 ```
 
-CapScope uses the root path for its HTTP handler in both SSE and Streamable HTTP modes.
+In SSE mode, clients connect to `/sse`; downstream client messages use `/message`. In Streamable HTTP mode, clients connect to `/`.

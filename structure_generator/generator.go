@@ -51,12 +51,15 @@ func validateOutputLocation(outputDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve working directory: %w", err)
 	}
-	relativeWorkingDir, err := filepath.Rel(absOutput, absWorkingDir)
-	if err != nil {
-		return fmt.Errorf("failed to compare output path with working directory: %w", err)
+	outputContainsWorkingDir := false
+	if strings.EqualFold(filepath.VolumeName(absOutput), filepath.VolumeName(absWorkingDir)) {
+		relativeWorkingDir, relErr := filepath.Rel(absOutput, absWorkingDir)
+		if relErr != nil {
+			return fmt.Errorf("failed to compare output path with working directory: %w", relErr)
+		}
+		outputContainsWorkingDir = relativeWorkingDir == "." ||
+			(relativeWorkingDir != ".." && !strings.HasPrefix(relativeWorkingDir, ".."+string(filepath.Separator)))
 	}
-	outputContainsWorkingDir := relativeWorkingDir == "." ||
-		(relativeWorkingDir != ".." && !strings.HasPrefix(relativeWorkingDir, ".."+string(filepath.Separator)))
 	absTempDir, err := filepath.Abs(os.TempDir())
 	if err != nil {
 		return fmt.Errorf("failed to resolve temporary directory: %w", err)
