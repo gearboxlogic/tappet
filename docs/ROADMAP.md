@@ -181,6 +181,8 @@ Exit criteria:
   budgets, even when idle shutdown is disabled
 - reinstall and uninstall cannot retarget or tear down a queued or transmitted
   invocation leased to an older registry generation
+- a queued invocation selects and validates the current provider schema
+  atomically at dispatch rather than pinning pre-queue metadata
 - post-call spill failures report the completed provider outcome and remain
   explicitly unsafe to retry
 - large output cannot silently consume unbounded model context or lose structured content

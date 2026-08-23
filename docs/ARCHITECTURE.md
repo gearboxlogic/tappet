@@ -882,6 +882,16 @@ CapScope atomically replaces the snapshot and invalidates old schema references.
 If refresh fails, invocation fails without calling the provider; known-stale
 metadata is never used as an invocation contract.
 
+Queue admission leases the resolved package generation, operation, provider
+binding, and provider-configuration fingerprint, but not a metadata generation
+or schema digest. Under the same serialization used for refresh and dirty
+notifications, dispatch atomically selects the current mapped tool and schema,
+validates arguments, and leases that selected metadata generation through the
+downstream call and terminal publication. A missing or incompatible current
+mapping fails with a typed provider-metadata result before transmission. A
+queued call therefore cannot use a pre-queue schema merely because its package
+and binding generation remain leased.
+
 V1 accepts only self-contained provider schemas. A `$ref` value may be `#` or a
 same-document JSON Pointer beginning with `#/`; ingestion resolves and validates
 that target exclusively within the received schema. V1 rejects `$id`,
