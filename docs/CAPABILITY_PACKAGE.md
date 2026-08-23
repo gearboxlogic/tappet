@@ -267,13 +267,24 @@ platforms must provide equivalent descriptor-relative, reparse-point-safe
 operations. The loader rejects `..`, absolute paths, symlink or reparse-point
 components, and non-directory intermediate components.
 
-Validation, digesting, and content reads use the same opened file descriptor;
-CapScope never validates a pathname and later reopens that pathname for use. A
-platform or filesystem adapter that cannot provide equivalent race-safe
-primitives is unsupported for local package reads and must reject package
-installation or access explicitly. Reopening and revalidating a canonical path
-is not an accepted fallback because another writer can swap a component between
-those operations.
+Validation and snapshot copying use the same opened file descriptor; CapScope
+never validates a pathname and later reopens that pathname for use. During
+installation it copies every accepted manifest and artifact through bounded
+readers into a CapScope-owned, immutable content-addressed snapshot while
+computing the digest. It publishes artifact references only after the complete
+snapshot has been atomically committed with the recorded length and digest.
+Subsequent `read` calls use that installed snapshot, not the mutable source
+descriptor, and verify the stored length and digest before returning bytes.
+Changing a source package requires an explicit reinstall that creates a new
+snapshot and manifest digest; in-place source writes cannot change an already
+published artifact reference.
+
+The snapshot store has finite per-artifact and aggregate quotas and is not
+writable through package paths. A platform or filesystem adapter that cannot
+provide the descriptor-relative race protection needed during ingestion is
+unsupported for local package reads and must reject installation explicitly.
+Reopening and revalidating a canonical source path is not an accepted fallback
+because another writer can swap a component between those operations.
 
 MCP resources may be added as a context source after the local-file vertical slice.
 
@@ -326,14 +337,26 @@ A capability may eventually request compatibility requirements, but should not s
 
 ### V1-alpha structure metadata limits
 
-The loader applies the following limits before registering a package. Byte
-limits are normalized UTF-8 bytes; item and aggregate limits use the canonical
-encoded JSON representation. These limits cover material returned by
+The loader enforces input limits during bounded ingestion and normalized limits
+before registering a package. It reads at most 1 MiB plus one sentinel byte
+before invoking the YAML parser, rejecting overflow without buffering the full
+input. The parser builds a bounded syntax tree with a maximum depth of 64 and
+16,384 nodes, enforcing both budgets as syntax events are scanned and aborting
+before constructing a node beyond either budget. V1 rejects anchors, aliases,
+and merge keys before alias resolution, and rejects duplicate mapping keys
+rather than ambiguously resolving them. Semantic decoding starts only after
+those syntax budgets pass.
+
+Field byte limits are normalized UTF-8 bytes; item and aggregate limits use the
+canonical encoded JSON representation. These limits cover material returned by
 `describe`, independently of the smaller discovery-card limits above.
 
 | Structure | Limit |
 | --- | ---: |
 | encoded `capscope.yaml` input | 1 MiB |
+| YAML nesting depth | 64 |
+| YAML syntax nodes | 16,384 |
+| YAML aliases, anchors, or merge keys | 0 |
 | skills | 32 entries |
 | operations | 128 entries |
 | context references | 128 entries |
