@@ -17,6 +17,8 @@ Work:
 - establish upstream attribution and license notices
 - add CI for tests, race detection, vet, formatting, and static analysis
 - record current tool-surface and startup benchmarks
+- retain the inherited HTTP `authTokens` field as an explicitly grandfathered,
+  redacted compatibility secret
 
 Exit criteria:
 
@@ -85,6 +87,7 @@ Work:
 - compact capability cards
 - exact match pinning
 - deterministic lexical ranking
+- stable capability-ID tie-breaking before top-K truncation
 - optional path-constrained search
 - explainable match reasons
 - deterministic cursor pagination for `describe` materialization
@@ -132,6 +135,7 @@ Work:
 - request cancellation and timeout
 - same-provider concurrency policy
 - different-provider parallelism
+- bounded global and per-provider active/queued invocation admission
 - explicit refresh
 - conservative cache invalidation
 - metadata and schema refresh before every invocation unless the active
@@ -151,12 +155,16 @@ Exit criteria:
 - idle provider stops and reconnects on next invoke
 - reconnect refreshes schemas before invoke and stale arguments never reach the provider
 - an ambiguously delivered provider call is never replayed automatically
+- saturated provider queues reject new work before enqueueing, while queued
+  cancellation is prompt and observable
 - post-call spill failures report the completed provider outcome and remain
   explicitly unsafe to retry
 - large output cannot silently consume unbounded model context or lose structured content
 - spill limits fail explicitly without exceeding per-result or aggregate quotas
 - an accepted spill remains completely retrievable through a bounded active
   continuation lease even when its original start-by deadline passes
+- every prepared final read chunk remains exactly replayable through a bounded
+  grace period
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
 - duplicate provider tool names across one metadata refresh reject the snapshot
   before map insertion or schema selection
@@ -212,6 +220,8 @@ Exit criteria:
   route without exposing unrelated provider resources
 - failed result publication releases staged resource capacity and preserves any
   structured downstream resource-read error
+- resource-read error spills commit independently after staged resource handles
+  are rolled back
 - a preservation failure reports that the provider call completed, retains the
   original `isError` classification, and is explicitly unsafe to retry
 - resources referenced by a spilled result remain live through result retrieval

@@ -263,6 +263,12 @@ Recommended initial ranking:
 
 Exact matches must be pinned ahead of top-K ranked results.
 
+The final order is deterministic: sort first by the match tier above, then by
+lexical score descending within a tier, then by fully qualified capability ID
+in ascending UTF-8 byte order. The ID tie-break is applied before `limit` or
+cursor pagination, so map iteration, database rebuilds, and equal-score cards
+cannot change which top-K results are returned.
+
 Start with deterministic lexical search. SQLite FTS5/BM25 is reasonable when catalog size warrants it; an in-memory index is sufficient for the first vertical slice. Embeddings should be an optional later index evaluated against a fixed retrieval corpus.
 
 Search results should include:
@@ -326,14 +332,19 @@ When the first artifact `read` is incomplete, it atomically acquires a lease on
 the resolved immutable snapshot and returns an opaque `continuation_ref` plus
 its `expires_at`. Every subsequent chunk passes that continuation reference as
 `ref`; it does not resolve the installed-package or metadata registry again.
-The lease survives reinstall, uninstall, and metadata refresh, and is released
-on the final chunk, a five-minute idle timeout, or a one-hour absolute lifetime.
-Each successful non-final chunk renews the idle deadline without extending the
-absolute deadline, and each response reports the effective expiry. Live-handle
-and retained-byte quotas bound this state, and admission fails before the first
-chunk is promised if a continuation cannot be reserved. These are explicit
-application handles independent of the broker transport or MCP protocol
-session.
+The lease survives reinstall, uninstall, and metadata refresh. It has a
+five-minute idle timeout and a one-hour absolute lifetime; each successful
+non-final chunk renews only the idle deadline. Preparing a final chunk retains
+the immutable object and an exact response replay for five additional minutes
+rather than releasing immediately. Repeating the same input reference, offset,
+and `max_bytes` during that fixed grace returns the byte-identical final response
+without resolving the registry, and does not extend the deadline. This also
+applies to a one-chunk artifact read whose original stable reference becomes
+stale after response preparation. Each response reports its effective expiry.
+Live-handle, replay-record, and retained-byte quotas bound this state, and
+admission fails before the first chunk is promised if continuation and replay
+capacity cannot be reserved. These are explicit application handles independent
+of the broker transport or MCP protocol session.
 
 An inline `invoke` result keeps the downstream MCP result at the outer protocol
 level. CapScope forwards every provider content block in the outer
@@ -406,15 +417,23 @@ lease. If the value is incomplete, that response returns a distinct opaque
 `continuation_ref`; later chunks must use that reference and the exact reported
 `next_offset`. The active lease has a five-minute idle timeout renewed by each
 successful non-final chunk and a one-hour absolute lifetime from the first
-chunk. Each response reports the effective lease expiry. The final chunk
-releases the lease. A read started before the published deadline therefore
-cannot be reclaimed between chunks merely because the original spill expiry
-passes.
+chunk. Each response reports the effective lease expiry. Preparing the final
+chunk marks the retrieval complete but does not release it immediately: CapScope
+retains the object and an exact replay record for a fixed five-minute final-chunk
+grace period. Repeating the same reference, final offset, and `max_bytes` during
+that period returns byte-identical data, digest, completion state, and next
+offset; it does not extend the grace deadline. The final response reports that
+deadline as its `expires_at`, after which the object and lease are released. A
+transport loss after response preparation therefore cannot make the last chunk
+unrecoverable.
+A read started before the published deadline cannot be reclaimed between chunks
+merely because the original spill expiry passes.
 
 Each byte range is base64 encoded, and reassembly preserves the complete
 broker-adapted typed MCP result or original JSON-RPC error. Spill admission
-reserves the object bytes, handle slot, and one potential retrieval lease
-atomically; live retrieval leases and retained bytes have finite quotas. An
+reserves the object bytes, handle slot, one potential retrieval lease, and the
+bounded final-replay grace atomically; live retrieval leases and retained bytes
+have finite quotas. An
 inactive spill expires at its published deadline, while an active lease is not
 evicted to admit another spill. If storage or lease reservation fails after a
 provider `CallToolResult` was received, `invoke` returns a bounded preservation
@@ -556,14 +575,22 @@ The block URI is then rewritten to an unguessable
 unchanged, and the snapshot record retains the original provider URI, provider
 fingerprint, content digest, and invocation ID for diagnostics and stale checks.
 
-Resource snapshots, the fully adapted result encoding, and any required result
-or resource-error spill are one publication transaction. CapScope commits the
-resource handles and spill handle together only after every link has been
-materialized and the final bounded response, preservation error, or spill has
-been prepared. Any failure before that commit releases every staged snapshot,
-object slot, and byte reservation; no unreachable resource object remains
-charged against quota. A transport failure after commit cannot be rolled back
-safely, so the ordinary finite handle expiry reclaims those published objects.
+On the successful result path, resource snapshots, the fully adapted result
+encoding, and any required result spill are one publication transaction.
+CapScope commits the resource handles and result-spill handle together only
+after every link has been materialized and the final bounded response or spill
+has been prepared. Any failure before that commit aborts the success transaction
+and releases every staged resource snapshot, object slot, and byte reservation;
+no unreachable resource object remains charged against quota.
+
+If a downstream `resources/read` failure needs an error spill for its structured
+cause, CapScope first aborts that success transaction. It then admits and commits
+an independent error-only spill transaction and returns its `error_ref` only
+after that commit succeeds. The error transaction never commits staged resource
+handles or a result spill. If error-spill admission fails, the preservation
+error returns the completed-call failure envelope without an `error_ref`. A
+transport failure after either publication commit cannot be rolled back safely,
+so ordinary finite handle expiry reclaims the published object.
 
 The outward broker advertises MCP resource support for a scoped
 `resources/read` route. Reading the rewritten URI returns the exact snapshotted
@@ -578,14 +605,16 @@ lifetimes independent of provider connections.
 For an inline result, every associated resource handle remains live for at
 least five minutes after result publication. For a spilled result, its resource
 snapshots are associated with the parent retrieval lease and remain pinned
-through that lease plus a five-minute link-use grace period. Returning the final
-spill chunk atomically sets each associated resource expiry to at least five
-minutes after that response. The publication transaction reserves retained
-bytes and object slots through the latest possible bound: the spill's published
-retrieval-start deadline, plus its one-hour maximum active lease, plus the grace
-period. It releases unused retention after completion or abandonment. If it
-cannot reserve that linked lifetime, invocation fails before any handle is
-published. Reading a resource does not renew it indefinitely.
+through its final-chunk replay window plus a five-minute link-use grace period.
+Preparing the first final spill response atomically sets each associated
+resource expiry to the fixed final-replay deadline plus five minutes; an exact
+final-chunk retry does not extend either deadline. The publication transaction
+reserves retained bytes and object slots through the latest possible bound: the
+spill's published retrieval-start deadline, plus its one-hour maximum active
+lease, plus the five-minute final replay and five-minute link-use grace periods.
+It releases unused retention after completion or abandonment. If it cannot
+reserve that linked lifetime, invocation fails before any handle is published.
+Reading a resource does not renew it indefinitely.
 
 If the provider does not support `resources/read`, the link cannot be read in
 the current session, any link or byte quota is exceeded, or snapshot admission
@@ -640,7 +669,27 @@ Only `lazy` is required for the first vertical slice. Idle timeout should be con
 
 Process lifecycle is separate from MCP protocol session state. A stateless MCP request model does not require restarting a stdio provider for each call.
 
-#### 6.6.1 Ambiguous delivery and retry safety
+#### 6.6.1 Invocation admission and queues
+
+Provider concurrency is admitted through explicit, cancellation-aware bounds,
+not an unbounded goroutine wait on a mutex. V1-alpha permits at most 128 active
+provider calls and 512 queued calls globally. Each provider permits at most 64
+queued calls; its active-call limit comes from the tested adapter concurrency
+policy, defaults to one, and may be configured no higher than 32. Queue entries
+contain only already bounded invocation data. Changing these maxima requires an
+architecture and benchmark update.
+
+Admission occurs before provider startup or acquisition. A full global or
+provider queue returns `provider_overloaded` without enqueueing or calling the
+provider; the response is bounded, classified as safe to retry, and includes a
+bounded `retry_after_ms` only when the scheduler can estimate one. Queue waiting
+is FIFO within a provider, counts against the invocation deadline, and is
+removed immediately on cancellation. Available global active slots are assigned
+round-robin across nonempty provider queues, so one saturated provider cannot
+consume every slot. Active and queued counts are exposed as bounded metrics
+without argument payloads.
+
+#### 6.6.2 Ambiguous delivery and retry safety
 
 V1 never automatically retries a downstream `tools/call` after any request byte
 has been handed to the transport. A timeout, cancellation, connection loss, or
@@ -652,7 +701,7 @@ automatically only when failure is proven to have occurred before transmission.
 Any future post-transmission retry requires an explicit provider contract for
 idempotency and a replay token; capability packages do not imply either.
 
-#### 6.6.2 Downstream transport frame limits
+#### 6.6.3 Downstream transport frame limits
 
 Every message received from a downstream provider has a finite pre-decode
 limit, regardless of method or direction of the JSON-RPC exchange. V1 permits
@@ -876,12 +925,16 @@ authentication.
 
 The catalog, resolver, materializer, and provider interfaces must remain
 independent of this middleware. Provider configuration may contain credential
-references or runtime injection settings, but never secret values. Actual
-credentials come from the environment or an external secret mechanism and are
-not persisted in packages, ordinary configuration, caches, or logs. Removing or
-replacing the gate requires a separate compatibility decision, tests for
-existing HTTP deployments, and migration guidance. CapScope does not grow this
-middleware into an IAM or policy subsystem.
+references or runtime injection settings, but new fields must not contain secret
+values. The inherited `mcpProxy.options.authTokens` field is the sole
+grandfathered exception during baseline compatibility: Milestone 0 continues to
+load and enforce its static bearer tokens from ordinary configuration. Those
+configuration files must be treated as secrets, the values are redacted from
+logs and diagnostics, and they are never copied into capability packages or
+caches. Removing or migrating this legacy field requires a separate
+compatibility decision, tests for existing HTTP deployments, and migration
+guidance toward environment or external secret injection. CapScope does not
+grow this middleware into an IAM or policy subsystem.
 
 ## 9. Latest MCP strategy
 
@@ -1069,6 +1122,10 @@ returns `continuation_ref`; subsequent requests use it as `ref` with the exact
 `next_offset`, as required by the bounded retrieval lease in section 6.5.1.
 `offset`, `next_offset`, `max_bytes`, and `stored_bytes` count decoded bytes in
 the stored UTF-8 JSON representation, not base64 characters.
+For artifacts and spills, preparing a final response creates the bounded replay
+record defined in section 6.5.1. Retrying the exact input reference, offset, and
+`max_bytes` before its reported expiry returns the same final response even if
+the first transport delivery was lost.
 
 ### `capscope.invoke`
 
