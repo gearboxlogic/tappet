@@ -169,7 +169,7 @@ Suggested responsibilities:
 
 - `search`: natural-language and exact-ID search, optionally constrained by hierarchy path
 - `describe`: return one capability's compact structure and explicitly selected operation schemas
-- `read`: return one skill body, referenced resource, or bounded chunk of a spilled invocation result
+- `read`: return one schema, skill body, reference, or bounded chunk of an artifact or spilled invocation result
 - `invoke`: execute one operation with typed arguments through its provider
 
 Broker mode does not depend on `tools/list_changed`.
@@ -299,25 +299,52 @@ It should:
 - avoid embedding a complete downstream catalog into its own tool descriptions
 - remain usable by clients that ignore live tool-list changes
 
-#### 6.5.1 Bounded invocation results
+#### 6.5.1 Bounded materialization and invocation results
 
-The broker must never silently truncate or flatten a provider result. If the
-complete typed result fits the configured inline limit, `invoke` returns it
-inline. Otherwise CapScope stores a lossless encoding of the complete typed
-result in a temporary spill object. The two envelope forms are:
+Every broker response has a finite encoded-size limit. CapScope must never
+silently truncate or flatten a schema, skill, reference, or provider result.
+
+Skills, references, and cached operation schemas have stable artifact
+references. `describe` returns a selected schema inline only when it fits the
+response limit; otherwise it returns that schema's artifact reference, media
+type, byte count, and digest. `read` accepts any artifact reference plus
+`offset` and `max_bytes`, so the complete schema, skill body, or reference can
+be fetched in bounded chunks. Package validation and provider metadata loading
+also enforce finite per-artifact limits. Content beyond those accepted limits
+is rejected explicitly rather than indexed or partially returned.
+Package artifact references include the package version and content digest.
+Schema references include the provider fingerprint and schema digest; a cache
+refresh invalidates references whose digest changed.
+
+An inline `invoke` result keeps the downstream MCP result at the outer protocol
+level. CapScope forwards every provider content block, including image, audio,
+embedded-resource, and resource-link blocks, in the outer
+`CallToolResult.Content`; it also preserves `StructuredContent` and `IsError`.
+CapScope invocation metadata goes in `_meta.capscope` and does not replace or
+wrap provider content. Existing provider `_meta` fields remain intact, and the
+reserved `capscope` key is merged without overwriting other metadata:
 
 ```json
 {
-  "invocation_id": "invocation:opaque-id",
-  "disposition": "inline",
-  "provider_is_error": false,
-  "result": {
-    "content": [],
-    "structuredContent": {},
-    "isError": false
+  "content": [{"type": "image", "data": "...", "mimeType": "image/png"}],
+  "structuredContent": {"provider": "value"},
+  "isError": false,
+  "_meta": {
+    "capscope": {
+      "invocation_id": "invocation:opaque-id",
+      "disposition": "inline"
+    }
   }
 }
 ```
+
+If the complete typed provider result exceeds the inline limit but remains
+within the accepted result limit, CapScope stores a lossless UTF-8 JSON encoding
+in a temporary spill object. `invoke` preserves the provider's outer `IsError`
+classification and returns compact spill metadata in `_meta.capscope` and
+structured content. Its outer content contains only a bounded notice directing
+the caller to `capscope.read`; it never presents a partial provider content
+array as complete:
 
 ```json
 {
@@ -333,20 +360,30 @@ result in a temporary spill object. The two envelope forms are:
 }
 ```
 
-The result reference is an opaque, process-local application handle. A caller
-retrieves it through bounded `read` calls using an offset and maximum byte
-count. Each response reports the next offset and whether the result is
-complete. The stored representation is UTF-8 JSON for the complete typed MCP
-result; each byte range is base64 encoded so chunks cannot corrupt text or
-binary content. Reassembly preserves structured MCP content and result types.
-The outer `capscope.invoke` result preserves the provider's `isError` value, and
-`provider_is_error` repeats that classification in the envelope when the typed
-result is spilled. If spill storage fails, `invoke` returns an explicit
-bounded-output error instead of a partial result.
+The result reference is an opaque application handle. A caller retrieves it
+through bounded `read` calls using an offset and maximum decoded byte count.
+Each byte range is base64 encoded, and each response reports the next offset
+and whether the result is complete. Reassembly preserves the complete typed MCP
+result. If storage fails, `invoke` returns an explicit bounded-output error
+instead of a partial result.
 
-Spill objects expire after a configured interval and are removed at shutdown.
-Their handles must be unguessable and excluded from logs. They are not MCP
-protocol sessions and must not carry hidden capability activation state.
+The spill store must enforce finite, operator-configurable limits for incoming
+provider-result bytes, bytes per spill object, aggregate live bytes, live object
+count, object lifetime, and bytes per `read`. Provider adapters enforce the
+incoming limit while reading, before unbounded decoding or allocation. Spill
+admission reserves aggregate bytes and an object slot atomically. It may reclaim
+expired objects, but it must not evict an unexpired object promised to a caller.
+An oversized result or exhausted store returns a distinct typed error and does
+not create a partial handle. V1 must ship safe finite defaults and expose quota
+failures through metrics and logs.
+
+Process-local spill objects expire after their configured lifetime and are
+removed at shutdown. Their handles must be unguessable and excluded from logs.
+They are not MCP protocol sessions and must not carry hidden capability
+activation state. A single-process V1 may use local storage. A replicated
+deployment must use a shared bounded spill store addressable by result reference
+or explicitly disable spill retrieval; process-local handles alone are not a
+stateless horizontal-scaling design.
 
 ### 6.6 Provider manager
 
@@ -388,6 +425,16 @@ Cache:
 - cache timestamp, provider fingerprint, and schema digest
 
 The cache should permit discovery while a lazy provider is stopped.
+
+Cached schemas are snapshots. Search and describe responses sourced from a
+stopped provider must report the observation time, provider fingerprint, schema
+digest, and cached freshness state. Every provider connection or reconnection
+must refresh current metadata and schema digests before the first invocation is
+accepted, even when configuration and package bindings are unchanged. If the
+digest changed, CapScope atomically replaces the snapshot, invalidates old
+schema references, and validates arguments only against the refreshed schema.
+If refresh fails, invocation fails without calling the provider; stale metadata
+is never used as an invocation contract.
 
 The cache must be invalidated by:
 
@@ -487,10 +534,13 @@ capability or operation, authorize a downstream action, or replace provider
 authentication.
 
 The catalog, resolver, materializer, and provider interfaces must remain
-independent of this middleware. Provider credentials stay in external provider
-configuration. Removing or replacing the gate requires a separate compatibility
-decision, tests for existing HTTP deployments, and migration guidance. CapScope
-does not grow this middleware into an IAM or policy subsystem.
+independent of this middleware. Provider configuration may contain credential
+references or runtime injection settings, but never secret values. Actual
+credentials come from the environment or an external secret mechanism and are
+not persisted in packages, ordinary configuration, caches, or logs. Removing or
+replacing the gate requires a separate compatibility decision, tests for
+existing HTTP deployments, and migration guidance. CapScope does not grow this
+middleware into an IAM or policy subsystem.
 
 ## 9. Latest MCP strategy
 
@@ -558,11 +608,12 @@ Input:
 }
 ```
 
-Output: skill metadata, operation cards, references, and the full input and
-output schemas plus schema digest for each exact operation ID named in
-`operation_schemas`. Full skill bodies remain deferred to `read`. Schemas for
-unselected operations are never returned. Unknown operation IDs fail
-explicitly, and the selector count and response size are bounded.
+Output: skill metadata, operation cards, references, and either the full input
+and output schemas or an exact schema artifact reference for each operation ID
+named in `operation_schemas`. Each operation card includes its schema reference
+and digest. Full skill bodies remain deferred to `read`. Schemas for unselected
+operations are never returned. Unknown operation IDs fail explicitly, and the
+selector count and response size are bounded.
 
 ### `capscope.read`
 
@@ -571,11 +622,17 @@ Input:
 ```json
 {
   "capability_id": "software.github.ci-debugging",
-  "ref": "skill:github-actions-debugging"
+  "ref": "operation:inspect-failed-checks/schema",
+  "offset": 0,
+  "max_bytes": 65536
 }
 ```
 
-Output: one skill body or one permitted reference resource.
+Output: one operation schema, skill body, permitted reference resource, or
+bounded chunk of one of those artifacts. A complete artifact is returned inline
+only when it fits the response limit. Larger accepted artifacts use the same
+`offset`, `max_bytes`, base64 chunk, byte-count, and digest fields shown below,
+with their stable artifact reference instead of a temporary result reference.
 
 For an oversized invocation result, the same tool accepts a result reference:
 
@@ -622,9 +679,10 @@ Input:
 }
 ```
 
-Output: an envelope containing CapScope invocation metadata and either the
-complete structured provider result inline or the spill metadata and result
-reference defined in section 6.5.1.
+Output: the provider's native MCP content blocks, structured content, and
+`isError` at the outer `CallToolResult` level when inline, with CapScope metadata
+under `_meta.capscope`. An oversized accepted result returns the spill metadata
+and result reference defined in section 6.5.1 without partial provider content.
 
 The first implementation may use fewer meta-tools if one union schema proves materially cheaper without harming validation. Benchmark the interface rather than assuming that the smallest tool count is automatically best.
 

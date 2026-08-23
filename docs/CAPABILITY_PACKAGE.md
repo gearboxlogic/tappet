@@ -284,22 +284,18 @@ A normalized card may look like:
   "description": "Inspect and diagnose GitHub Actions checks and workflow failures.",
   "path": "software.github",
   "tags": ["github", "ci", "actions"],
-  "skills": [
-    {
-      "name": "github-actions-debugging",
-      "description": "Diagnose GitHub Actions workflow and job failures."
-    }
-  ],
-  "operations": [
-    {
-      "id": "inspect-failed-checks",
-      "description": "Inspect failed checks for a pull request."
-    }
-  ]
+  "counts": {
+    "skills": 1,
+    "operations": 1,
+    "references": 2
+  }
 }
 ```
 
-The card excludes full schemas, full instructions, provider commands, environment values, and context bodies.
+The card excludes skill and operation lists, full schemas, full instructions,
+provider commands, environment values, and context bodies. Search may identify
+the one operation, skill, tag, or field that caused a match, but it must not
+enumerate the capability structure. `describe` owns that materialization step.
 
 ## 11. Validation
 

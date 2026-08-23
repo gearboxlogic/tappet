@@ -153,7 +153,7 @@ PMCP demonstrates that the gateway can become a platform quickly. CapScope shoul
 Source:
 
 - https://github.com/mcp-shark/lazy-tool
-- inspected blob/tree through repository `main`
+- inspected commit: `06cc200e85dd916dff7c0d789b7f0fca56192ab3`
 - license: MIT
 
 Useful mechanisms:
@@ -302,7 +302,7 @@ Relevant changes:
 
 CapScope implications:
 
-- fixed outward broker tools fit stateless horizontal scaling
+- fixed outward broker tools fit stateless request handling when responses remain inline; process-local spill handles require additional deployment constraints
 - hidden client-to-capability session mapping should be avoided
 - any later activation state needs an explicit application handle
 - provider process reuse remains valid
