@@ -503,14 +503,23 @@ reader. An oversized value or exhausted store returns a distinct typed error
 and does not create a partial handle. V1 must ship safe finite defaults and
 expose quota failures through metrics and logs.
 
-Process-local spill objects follow the inactive and active deadlines above and
-are removed at shutdown. Their handles are bearer secrets: they must be unguessable
-and must never appear raw in logs, trace attributes or events, metric labels,
-error messages, panic reports, or audit payloads. Telemetry may correlate a
-handle only through an irreversible keyed digest produced with a
-telemetry-specific secret; that digest is never accepted by `read`. Result
-handles are not MCP protocol sessions and must not carry hidden capability
-activation state. A single-process V1 may use local storage. A replicated
+Every opaque handle that grants access to retained bytes or replay state is a
+bearer secret. This includes result and error spill references, every artifact
+or spill `continuation_ref`, rewritten resource handles, and final-response
+replay handles. Each handle must be unguessable and must never appear raw in
+logs, trace attributes or events, metric labels, error messages, panic reports,
+or audit payloads. Telemetry may correlate a handle only through an irreversible
+keyed digest produced with a telemetry-specific secret; that digest is never
+accepted by `read` or `resources/read`. A stable package or schema reference
+that is reauthorized against the current registry is not a continuation handle.
+Once an incomplete read returns a continuation, that bearer handle alone selects
+the retained snapshot and receives these protections even after reinstall or
+uninstall.
+
+Process-local retained objects follow the inactive and active deadlines above
+and are removed at shutdown. Application handles are not MCP protocol sessions
+and must not carry hidden capability activation state. A single-process V1 may
+use local storage. A replicated
 deployment must make every handle-backed object and its atomic lease/replay
 state resolvable across requests. This includes result and error spills,
 rewritten provider resources, artifact and spill continuation handles, and final
@@ -657,6 +666,37 @@ contains the resulting opaque error reference. Local unsupported-resource and
 quota failures remain separately classified; they are never presented as a
 provider authorization error.
 
+#### 6.5.4 Broker admission and queues
+
+Per-message limits do not bound aggregate broker work. Every outward transport
+therefore uses a cancellation-aware ingress gate before it retains or decodes a
+complete request. V1-alpha permits at most 128 active broker requests and 256
+queued requests globally, with at most 64 active and 128 queued for any one
+broker tool or resource method. Queued encoded request bytes have a separate
+64 MiB global ceiling. Deployments may lower these values; raising a V1-alpha
+maximum requires an architecture and benchmark update.
+
+The transport reserves global request-count and encoded-byte capacity before
+reading or retaining the full bounded frame. HTTP uses the declared length when
+valid and pessimistically reserves the 1 MiB message maximum otherwise; framed
+transports pause before consuming another frame when no ingress slot exists.
+After the bounded envelope identifies the method, admission atomically moves the
+request to that method's queue or rejects it without starting handler work.
+Unknown and malformed methods use a finite control-method bucket within the same
+global limits. A transport that cannot apply bounded ingress backpressure must
+reject overload and close the affected connection rather than accumulate
+requests outside the gate.
+
+Global active slots are assigned round-robin across nonempty method queues.
+Queue waiting counts against the request deadline, and cancellation removes the
+entry immediately. A full method queue returns bounded `broker_overloaded` when
+a valid JSON-RPC ID is available; HTTP may return a bounded 503 before decoding
+when ingress capacity is already exhausted. An admitted `invoke` retains its
+broker active slot while it waits in or executes through the separate provider
+admission gate, so downstream saturation cannot bypass the broker-wide bound.
+Metrics expose only bounded counts, byte totals, wait durations, and method
+names, never request payloads or bearer handles.
+
 ### 6.6 Provider manager
 
 The provider manager adapts downstream MCP servers.
@@ -748,6 +788,25 @@ in-place resynchronization. The prior atomic metadata-cache snapshot remains
 intact, but no further request is accepted until the provider manager
 establishes and initializes a fresh connection. Repeated violations feed normal
 failure backoff and bounded telemetry.
+
+Per-message bounds also do not permit an unbounded stream of individually valid
+provider-originated events. Each provider connection dispatches notifications
+and callback requests through a cancellation-aware queue capped at 256 messages
+and 16 MiB of encoded data, with at most 16 handlers active at once. The adapter
+reserves both count and byte capacity after the pre-decode scan and before it
+constructs a method-specific object or starts a handler goroutine. Terminal
+responses route directly to the already bounded in-flight request set and do
+not create an independent unbounded queue.
+
+The reader may exert transport backpressure only while reserved capacity exists;
+it never waits indefinitely for an event consumer while continuing to retain
+new frames. Failure to reserve event capacity closes the provider connection
+and reports `provider_event_overflow`. CapScope terminates the stdio child or
+closes the HTTP or event stream, cancels queued event work, and classifies every
+affected transmitted invocation through the ambiguous-delivery rules above.
+Unsupported callbacks are rejected within the same finite handler budget. Event
+payloads, goroutines, and callback correlation state therefore remain bounded
+even when a provider floods progress, list-change, or unsolicited messages.
 
 ### 6.7 Metadata cache
 
@@ -1211,11 +1270,15 @@ Correctness:
 - oversized structured results can be retrieved completely without silent truncation
 - request and provider-message nesting and syntax-node limits fire before
   general object construction
+- broker requests and provider-originated events cannot create unbounded queues
+  or handler concurrency
 - provider schemas cannot trigger external I/O or unbounded validation work
 - post-call preservation failures retain completed-call and original `isError` state
 - rewritten resource links remain readable for their promised post-result lifetime
 - every published cross-call handle resolves across replicas, or startup rejects
   the unsupported replicated configuration
+- every continuation or retained-data handle is unguessable and excluded from
+  raw telemetry
 - provider processes start and stop predictably
 
 Efficiency:
