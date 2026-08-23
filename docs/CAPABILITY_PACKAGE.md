@@ -349,13 +349,16 @@ explicit, bounded continuation-handle leases. Resolving an artifact reference,
 acquiring its snapshot lease, and issuing a continuation handle for an
 incomplete first response are atomic. Every later chunk uses that opaque handle
 rather than resolving the mutable registry again, so reinstall or uninstall
-cannot interrupt an accepted multi-call read. A handle lease is released on the
-final chunk, a five-minute idle timeout, or a one-hour absolute lifetime,
-whichever occurs first. Each successful non-final chunk renews the idle deadline
-without extending the absolute deadline, and each response reports the effective
-expiry. Counts of live handles and retained bytes have finite
-operator-configurable quotas, and admission failure returns a typed error before
-promising a continuation.
+cannot interrupt an accepted multi-call read. An unfinished handle lease is
+released on a five-minute idle timeout or a one-hour absolute lifetime. Each
+successful non-final chunk renews the idle deadline without extending the absolute
+deadline. Preparing the final chunk retains the immutable object and an exact,
+idempotent final response for a fixed five-minute replay grace; the same
+reference, offset, and byte limit returns that response without extending the
+grace. Single-chunk reads receive the same protection if reinstall races final
+delivery. Each response reports the effective expiry. Counts of live handles,
+replay records, and retained bytes have finite operator-configurable quotas, and
+admission failure returns a typed error before promising retrieval.
 Garbage collection may delete a superseded or uninstalled snapshot only after
 both its registry count and continuation-lease count reach zero. Identical
 content-addressed objects shared by active snapshots remain live until the
