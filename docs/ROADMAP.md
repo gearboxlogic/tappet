@@ -203,6 +203,8 @@ Exit criteria:
   structured result or error preservation without `float64` rounding
 - duplicate JSON object members are rejected before argument validation or
   provider transmission
+- duplicate JSON object members in downstream responses and errors are rejected
+  before the SDK can collapse them into maps
 - terminal provider-error spill capacity is reserved before transmission, so
   quota exhaustion cannot replace an authorization or other provider error
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
@@ -227,6 +229,11 @@ tappet.invoke
 The fixed tool surface is accompanied by the scoped MCP `resources/read` proxy
 defined in `ARCHITECTURE.md`; it does not enumerate a provider-wide resource
 catalog or add dynamic tools.
+
+Milestone exit also requires deterministic encoded response ceilings, a bounded
+HTTP terminal-response write deadline, attempt IDs on every initial artifact or
+spill read, and tests proving that provider resource-read errors cannot retain
+or republish a requested plaintext provider URI.
 
 Test environment:
 

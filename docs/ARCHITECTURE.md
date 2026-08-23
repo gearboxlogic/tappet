@@ -316,6 +316,38 @@ It should:
 Every broker response has a finite encoded-size limit. Tappet must never
 silently truncate or flatten a schema, skill, reference, or provider result.
 
+V1-alpha uses these encoded-byte ceilings. The defaults are also the hard
+maxima unless this document and the associated benchmarks are updated:
+
+| Value | Default | Hard maximum |
+| --- | ---: | ---: |
+| complete outward JSON-RPC response | 1 MiB | 1 MiB |
+| inline materialization or typed invocation result | 256 KiB | 1 MiB |
+| accepted broker-adapted invocation result | 16 MiB | 16 MiB |
+| accepted downstream JSON-RPC error | 16 MiB | 16 MiB |
+| one snapshotted provider resource response | 4 MiB | 4 MiB |
+| all snapshotted resource responses for one invocation | 16 MiB | 16 MiB |
+| decoded bytes in one `tappet.read` chunk | 64 KiB | 64 KiB |
+
+Encoded response size means the exact compact UTF-8 JSON encoding of the
+complete outward JSON-RPC response. It includes the outer envelope, content,
+structured content, metadata, member names, escaping, and base64 expansion.
+HTTP framing and content encoding do not change the accounting. The inline
+decision uses a deterministic encoding of the whole candidate response. The
+accepted-result limit uses the complete broker-adapted typed-result encoding
+after resource URI rewriting, while the downstream frame limit applies to the
+provider message before adaptation.
+
+A 64 KiB decoded `read` chunk expands to 87,384 base64 bytes. Bounded handles
+and fixed metadata keep its complete encoded response below 128 KiB and
+therefore below the 1 MiB broker-response ceiling. A deployment may lower a
+limit only when every dependent limit still fits. Startup validation constructs
+the maximum-shaped `read` response and rejects a configuration whose response
+ceiling cannot contain it; an operator that needs a smaller response ceiling
+must also lower the decoded chunk maximum. Limits are checked against the
+encoded candidate before publication, so no transport-specific encoder can
+turn an accepted response into an oversized one.
+
 Skills, references, and cached operation schemas have stable artifact
 references. `describe` returns a selected schema inline only when it fits the
 response limit; otherwise it returns that schema's artifact reference, media
@@ -730,13 +762,28 @@ Tappet-connected harness cannot resolve. This scoped proxy does not expose a
 provider-wide resource catalog and does not add dynamic tools; implementing it
 belongs to the portable broker milestone, not Milestone 0.
 
-When downstream `resources/read` returns a structured JSON-RPC error, the
-preservation error retains the original numeric code, message, and structured
-data unchanged in a bounded `cause`. If that cause exceeds the inline limit,
-the ordinary lossless error-spill path in section 6.5.1 stores it and the cause
-contains the resulting opaque error reference. Local unsupported-resource and
-quota failures remain separately classified; they are never presented as a
-provider authorization error.
+When downstream `resources/read` returns a structured JSON-RPC error, URI
+secrecy is the narrow exception to byte-for-byte provider-error preservation.
+Before sizing, spilling, logging, tracing, or publication, a bounded recursive
+sanitizer replaces every exact occurrence of each plaintext provider URI known
+to that read attempt in the message and in every JSON string token, including
+decoded object member names, with
+`tappet-redacted-uri:<irreversible-keyed-digest>`. The token is not accepted by
+`read` or `resources/read`. The sanitizer retains the original numeric code,
+provider error classification, all non-URI message text, and all other
+structured data. The sanitized cause then uses the ordinary inline or
+error-spill path in section 6.5.1.
+
+Sanitization runs within the accepted frame, depth, node, and encoded-output
+budgets. If it exceeds a budget, creates duplicate member names after
+replacement, or cannot prove that the known plaintext URIs are absent, Tappet
+returns `resource_link_unmaterializable` with the original numeric code,
+provider classification, and completed-call state, but uses the fixed message
+`Downstream resource error payload withheld` and omits the unsafe provider
+message and data. Tappet never stores, returns, or emits telemetry containing
+the unsanitized payload. Local unsupported-resource and quota failures remain
+separately classified; they are never presented as a provider authorization
+error.
 
 #### 6.5.4 Broker admission and queues
 
@@ -767,6 +814,20 @@ request transport; HTTP may return a bounded 408 when safe. The ordinary
 request deadline begins no later than ingress reservation, so method decoding
 cannot reset its elapsed time. Deployments may lower these values, but disabling
 them is unsupported on an untrusted broker endpoint.
+
+HTTP also applies a non-renewable 30-second terminal-publication deadline to
+each response. The adapter sets the write deadline immediately before the first
+response header or body byte, and the deadline covers the complete encoded
+response, flush, and terminal transport publication. It is separate from
+handler execution time so a valid long-running provider call does not consume
+the response-write budget before publication begins. A streaming transport
+applies the same 30-second bound independently to each complete outbound frame;
+partial write progress does not renew it. Expiry cancels the request, releases
+its broker and connection reservations, and force-closes the transport so a
+client that stops reading cannot retain a request slot indefinitely. The HTTP
+implementation must use a per-response write deadline or an equivalent
+mechanism; `IdleTimeout` alone does not bound an active response write.
+
 After the bounded envelope identifies the method, admission atomically moves the
 request to that method's queue or rejects it without starting handler work.
 Unknown and malformed methods use a finite control-method bucket within the same
@@ -873,7 +934,13 @@ limit, regardless of method or direction of the JSON-RPC exchange. V1 permits
 at most 16 MiB of encoded data, 128 levels of JSON object/array nesting, and
 1,048,576 JSON syntax nodes per downstream protocol message. Each object member
 name, scalar value, object, and array counts as a node. A token scanner enforces
-all three limits before the SDK constructs the general object graph. The limits apply to
+all three limits before the SDK constructs the general object graph. During the
+same scan, every object keeps a bounded set of decoded member names and rejects
+duplicates, including escape-equivalent spellings, with
+`provider_message_duplicate_key`. This applies to result content, structured
+content, metadata, schemas, JSON-RPC error data, and every other nested object;
+the SDK must never receive a message whose duplicate members it could collapse
+into a map. The limits apply to
 initialize and discovery responses, invocation results, errors, notifications,
 ping responses, progress events, and unsolicited requests or callbacks. The
 stricter metadata and result-ingestion quotas still apply after this transport
@@ -887,7 +954,8 @@ that cannot expose a pre-decode boundary is unsupported for downstream V1 use.
 
 An exceeded byte limit returns `provider_frame_limit_exceeded`; exceeded depth
 returns `provider_message_depth_exceeded`; exceeded node count returns
-`provider_message_node_limit_exceeded`. Any failure
+`provider_message_node_limit_exceeded`; and a duplicate member returns
+`provider_message_duplicate_key`. Any failure
 fails every affected in-flight request and closes the protocol connection.
 Tappet terminates a stdio child whose stream can no longer be trusted and
 closes an HTTP or event stream session; it does not skip bytes or attempt
@@ -1315,10 +1383,18 @@ accepts the corresponding spill reference:
 ```json
 {
   "ref": "result:opaque-handle",
+  "attempt_id": "read:client-generated-128-bit-random-value",
   "offset": 0,
   "max_bytes": 65536
 }
 ```
+
+The published `tappet.read` input schema is a union of two request shapes. An
+initial request with a stable artifact, result-spill, or error-spill `ref`
+requires `attempt_id`; an initial spill read also requires `offset: 0`. A
+continuation request requires the returned continuation `ref` and omits
+`attempt_id`. Schema validation rejects an initial request without its attempt
+ID and rejects a continuation request that supplies one.
 
 Output:
 
