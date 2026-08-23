@@ -309,13 +309,22 @@ then opened relative to the preceding directory handle with no-follow and
 beneath-root semantics. On Linux this means `openat2` with
 `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` where available, or a
 component-by-component `openat` walk using directory descriptors and
-`O_NOFOLLOW`; other
-platforms must provide equivalent descriptor-relative, reparse-point-safe
-operations. The loader rejects `..`, absolute paths, symlink or reparse-point
-components, and non-directory intermediate components.
+`O_NOFOLLOW`; other platforms must provide equivalent descriptor-relative,
+reparse-point-safe operations. The loader rejects `..`, absolute paths, symlink
+or reparse-point components, and non-directory intermediate components.
 
-Validation and snapshot copying use the same opened file descriptor; CapScope
-never validates a pathname and later reopens that pathname for use. During
+Every final manifest, `SKILL.md`, context entry, and listed resource is opened
+descriptor-relative with no-follow and nonblocking semantics before any read.
+On Unix this includes `O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`. CapScope immediately
+uses `fstat` on that descriptor and accepts only a regular file; directories,
+FIFOs, sockets, block or character devices, and every other special type are
+rejected. `O_NONBLOCK` prevents a FIFO open from waiting for a writer, and no
+bytes are read from a device or other rejected descriptor. Platforms that
+cannot provide an equivalent nonblocking type check must reject local package
+ingestion rather than attempt a possibly blocking open.
+
+Validation and snapshot copying use that same verified regular-file descriptor;
+CapScope never validates a pathname and later reopens that pathname for use. During
 installation it copies every accepted manifest and artifact through bounded
 readers into a CapScope-owned, immutable content-addressed snapshot while
 computing the digest. It publishes artifact references only after the complete

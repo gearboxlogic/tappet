@@ -378,8 +378,8 @@ within the accepted result limit, CapScope stores a lossless UTF-8 JSON encoding
 in a temporary spill object. `invoke` preserves the provider's outer `IsError`
 classification and returns compact spill metadata in
 `_meta["io.capscope.proxy"].invocation` and structured content. The complete
-complete broker-adapted typed result, including the provider `_meta` object at
-its original keys and any scoped resource-link rewrites, exists only inside the
+broker-adapted typed result, including the provider `_meta` object at its
+original keys and any scoped resource-link rewrites, exists only inside the
 lossless spill. No provider metadata is copied into the spilled outer response
 because it may itself be what exceeded the inline limit. The outer content
 contains only a bounded notice directing the caller to `capscope.read`; it never
@@ -399,12 +399,43 @@ presents a partial provider content array as complete:
 }
 ```
 
-Each result or error spill reference is an opaque application handle. A caller
-retrieves it through bounded `read` calls using an offset and maximum decoded
-byte count. Each byte range is base64 encoded, and each response reports the
-next offset and whether the spill is complete. Reassembly preserves the complete
-broker-adapted typed MCP result or original JSON-RPC error. If storage fails,
-`invoke` returns an explicit bounded-output error instead of a partial value.
+Each result or error spill reference is an opaque application handle with a
+published `expires_at` by which retrieval must begin. The first `read` uses the
+spill reference at offset zero and atomically activates its reserved retrieval
+lease. If the value is incomplete, that response returns a distinct opaque
+`continuation_ref`; later chunks must use that reference and the exact reported
+`next_offset`. The active lease has a five-minute idle timeout renewed by each
+successful non-final chunk and a one-hour absolute lifetime from the first
+chunk. Each response reports the effective lease expiry. The final chunk
+releases the lease. A read started before the published deadline therefore
+cannot be reclaimed between chunks merely because the original spill expiry
+passes.
+
+Each byte range is base64 encoded, and reassembly preserves the complete
+broker-adapted typed MCP result or original JSON-RPC error. Spill admission
+reserves the object bytes, handle slot, and one potential retrieval lease
+atomically; live retrieval leases and retained bytes have finite quotas. An
+inactive spill expires at its published deadline, while an active lease is not
+evicted to admit another spill. If storage or lease reservation fails after a
+provider `CallToolResult` was received, `invoke` returns a bounded preservation
+`CallToolResult` with `IsError: true` and the completed-call envelope:
+
+```json
+{
+  "provider_call_state": "completed",
+  "provider_is_error": false,
+  "provider_result_published": false,
+  "retry_safe": false,
+  "invocation_id": "invocation:opaque-id",
+  "failure": "result_spill_failed"
+}
+```
+
+The original `provider_is_error` value is retained. This local preservation
+failure never reports the provider operation as failed or outcome-unknown and
+never returns a partial provider result. The same completed-call envelope is
+required for every broker-local adaptation, encoding, resource-materialization,
+or publication failure after a provider `CallToolResult` has arrived.
 
 A downstream JSON-RPC error is not an MCP `CallToolResult` and follows the same
 bounded-preservation rule separately. When the complete encoded error object
@@ -434,21 +465,27 @@ restores the exact original code, message, and data. The outer envelope never
 copies a partial provider `data` value or truncates the provider message. If
 error-spill admission fails, CapScope returns the distinct bounded
 `downstream_error_spill_failed` proxy error and does not pretend the original
-error was preserved. MCP results with `isError: true` remain typed
-`CallToolResult` values and use the ordinary result path above.
+error was preserved. Its bounded data still records
+`provider_call_state: "completed"`, `provider_error_received: true`, and
+`retry_safe: false`, because CapScope received the provider's terminal JSON-RPC
+error even though it could not preserve the full payload. MCP results with
+`isError: true` remain typed `CallToolResult` values and use the ordinary result
+path above.
 
 The spill store must enforce finite, operator-configurable limits for incoming
 provider-result or error bytes, bytes per spill object, aggregate live bytes,
 live object count, object lifetime, and bytes per `read`. Provider adapters
 enforce the incoming limit while reading, before unbounded decoding or
-allocation. Spill admission reserves aggregate bytes and an object slot
-atomically. It may reclaim expired objects, but it must not evict an unexpired
-object promised to a caller. An oversized value or exhausted store returns a
-distinct typed error and does not create a partial handle. V1 must ship safe
-finite defaults and expose quota failures through metrics and logs.
+allocation. Spill admission reserves aggregate bytes, an object slot, and one
+potential retrieval-lease slot atomically. It may reclaim an inactive object
+after its published retrieval-start deadline or an active object after its idle
+or absolute lease expires, but it must not evict an active object promised to a
+reader. An oversized value or exhausted store returns a distinct typed error
+and does not create a partial handle. V1 must ship safe finite defaults and
+expose quota failures through metrics and logs.
 
-Process-local spill objects expire after their configured lifetime and are
-removed at shutdown. Their handles are bearer secrets: they must be unguessable
+Process-local spill objects follow the inactive and active deadlines above and
+are removed at shutdown. Their handles are bearer secrets: they must be unguessable
 and must never appear raw in logs, trace attributes or events, metric labels,
 error messages, panic reports, or audit payloads. Telemetry may correlate a
 handle only through an irreversible keyed digest produced with a
@@ -540,14 +577,15 @@ lifetimes independent of provider connections.
 
 For an inline result, every associated resource handle remains live for at
 least five minutes after result publication. For a spilled result, its resource
-snapshots are pinned through the parent result handle's expiry plus a five-minute
-link-use grace period. Returning the final spill chunk atomically confirms that
-each associated resource expiry is at least five minutes after that response;
-because a spill cannot be read after its own expiry, this never extends a
-resource beyond the already reserved parent-expiry-plus-grace bound. The
-publication transaction reserves retained bytes and object slots for that full
-interval. If it cannot reserve the linked lifetime, invocation fails before any
-handle is published. Reading a resource does not renew it indefinitely.
+snapshots are associated with the parent retrieval lease and remain pinned
+through that lease plus a five-minute link-use grace period. Returning the final
+spill chunk atomically sets each associated resource expiry to at least five
+minutes after that response. The publication transaction reserves retained
+bytes and object slots through the latest possible bound: the spill's published
+retrieval-start deadline, plus its one-hour maximum active lease, plus the grace
+period. It releases unused retention after completion or abandonment. If it
+cannot reserve that linked lifetime, invocation fails before any handle is
+published. Reading a resource does not renew it indefinitely.
 
 If the provider does not support `resources/read`, the link cannot be read in
 the current session, any link or byte quota is exceeded, or snapshot admission
@@ -722,6 +760,14 @@ a finite total metadata-cache quota across providers; reaching it fails refresh
 without unbounded disk growth. Changing these V1-alpha hard limits requires an
 explicit architecture and benchmark update.
 
+A refresh also maintains one exact-name set across every `tools/list` page.
+Seeing the same provider tool name twice rejects the entire refresh with
+`provider_metadata_duplicate_tool`, even when both entries are byte-identical.
+Duplicate detection occurs before insertion into a name-keyed map or schema
+compilation, so page order cannot choose an invocation contract. The previous
+atomic cache snapshot remains active, and first invocation fails rather than
+calling an ambiguously described tool when no prior valid snapshot exists.
+
 The cache must be invalidated by:
 
 - explicit refresh
@@ -789,14 +835,14 @@ Derived state must be rebuildable.
 - harness-native active projections
 - temporary output spill files
 - explicit handles for temporary spilled results
-- explicit continuation handles for multi-call artifact reads
+- explicit continuation handles for multi-call artifact and spill reads
 
 ### 7.4 Explicit application handles
 
 MCP 2026-07-28 removes protocol-level sessions. Any cross-call scope, lease,
 task, or activation must use an explicit application handle passed by the
-caller. Spill references, resource handles, and artifact continuation handles
-follow this rule.
+caller. Spill references, resource handles, and artifact or spill continuation
+handles follow this rule.
 
 Do not map an implicit client connection to hidden capability state.
 
@@ -1004,6 +1050,7 @@ Output:
 ```json
 {
   "ref": "result:opaque-handle",
+  "continuation_ref": "read:opaque-handle",
   "offset": 0,
   "data_base64": "encoded byte range",
   "next_offset": 65536,
@@ -1017,7 +1064,9 @@ Output:
 
 Reassembling the decoded byte ranges yields the complete broker-adapted typed
 provider result or original JSON-RPC error represented by the spill object. The
-digest verifies the reassembled value.
+digest verifies the reassembled value. An incomplete first spill response
+returns `continuation_ref`; subsequent requests use it as `ref` with the exact
+`next_offset`, as required by the bounded retrieval lease in section 6.5.1.
 `offset`, `next_offset`, `max_bytes`, and `stored_bytes` count decoded bytes in
 the stored UTF-8 JSON representation, not base64 characters.
 
@@ -1085,7 +1134,7 @@ Correctness:
 - oversized structured results can be retrieved completely without silent truncation
 - request and provider-message nesting limits fire before general object construction
 - provider schemas cannot trigger external I/O or unbounded validation work
-- resource-preservation failures retain completed-call and original `isError` state
+- post-call preservation failures retain completed-call and original `isError` state
 - rewritten resource links remain readable for their promised post-result lifetime
 - provider processes start and stop predictably
 
