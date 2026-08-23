@@ -133,6 +133,8 @@ Work:
 - conservative cache invalidation
 - metadata and schema refresh before every invocation unless the active
   connection negotiated reliable tool-list change notifications
+- self-contained schema-reference policy with bounded, cancellation-aware
+  compilation and argument validation
 - bounded inline output plus quota-limited lossless spill and chunked retrieval
 - lifecycle status and telemetry
 
@@ -149,6 +151,8 @@ Exit criteria:
 - large output cannot silently consume unbounded model context or lose structured content
 - spill limits fail explicitly without exceeding per-result or aggregate quotas
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
+- external schema references and over-budget schema compilation or validation
+  fail without network access or provider invocation
 
 ## Milestone 5: Portable broker vertical slice
 
@@ -190,6 +194,8 @@ Measure:
 Exit criteria:
 
 - fixed initial surface independent of catalog size
+- broker and downstream nesting limits are enforced during tokenization before
+  general JSON object construction
 - irrelevant capabilities do not enter the transcript
 - provider authorization still applies
 - structured result survives proxying
@@ -197,6 +203,10 @@ Exit criteria:
   route without exposing unrelated provider resources
 - failed result publication releases staged resource capacity and preserves any
   structured downstream resource-read error
+- a preservation failure reports that the provider call completed, retains the
+  original `isError` classification, and is explicitly unsafe to retry
+- resources referenced by a spilled result remain live through result retrieval
+  plus the bounded link-use grace period
 - results beat eager exposure on context size without unacceptable task-success loss
 
 ## Milestone 6: Scale and retrieval evaluation
