@@ -17,8 +17,9 @@ Work:
 - establish upstream attribution and license notices
 - add CI for tests, race detection, vet, formatting, and static analysis
 - record current tool-surface and startup benchmarks
-- retain the inherited HTTP `authTokens` field as an explicitly grandfathered,
-  redacted compatibility secret
+- retain inherited outward `authTokens` and provider `env`, `headers`, command
+  arguments, URLs, and configuration-fetch headers as explicitly grandfathered,
+  redacted compatibility inputs
 
 Exit criteria:
 
@@ -26,6 +27,8 @@ Exit criteria:
 - repository naming is internally consistent
 - CI is green
 - no planned feature is represented as implemented
+- existing stdio, SSE, Streamable HTTP, outward HTTP, and remote-configuration
+  credential inputs remain compatible and absent from logs and generated data
 
 ## Milestone 1: Modern MCP foundation
 
@@ -147,6 +150,8 @@ Work:
 - bounded global and per-provider active/queued invocation admission
 - explicit refresh
 - conservative cache invalidation
+- migrate inherited literal provider credential inputs only through a tested
+  compatibility decision and operator guidance
 - metadata and schema refresh before every invocation unless the active
   connection negotiated reliable tool-list change notifications
 - self-contained schema-reference policy with bounded, cancellation-aware

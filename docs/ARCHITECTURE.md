@@ -941,7 +941,9 @@ section 6.5.1 may be recorded.
 - capability manifests
 - Agent Skills packages
 - referenced static context
-- provider configuration without embedded secrets
+- provider configuration; new fields use references or runtime injection, while
+  inherited literal credential-bearing fields remain under the temporary
+  compatibility exception in section 8.1
 - architecture decisions
 - tests and benchmark corpora
 
@@ -1005,15 +1007,29 @@ authentication.
 The catalog, resolver, materializer, and provider interfaces must remain
 independent of this middleware. Provider configuration may contain credential
 references or runtime injection settings, but new fields must not contain secret
-values. The inherited `mcpProxy.options.authTokens` field is the sole
-grandfathered exception during baseline compatibility: Milestone 0 continues to
-load and enforce its static bearer tokens from ordinary configuration. Those
-configuration files must be treated as secrets, the values are redacted from
-logs and diagnostics, and they are never copied into capability packages or
-caches. Removing or migrating this legacy field requires a separate
-compatibility decision, tests for existing HTTP deployments, and migration
-guidance toward environment or external secret injection. CapScope does not
-grow this middleware into an IAM or policy subsystem.
+values. Baseline compatibility nevertheless retains the inherited literal
+inputs already accepted by current deployments:
+
+- `mcpProxy.options.authTokens`
+- `mcpServers.<provider>.env`
+- `mcpServers.<provider>.headers`
+- provider command arguments or URLs that contain inline credentials
+- configuration-fetch headers supplied through the existing CLI
+
+These are grandfathered compatibility inputs, not a CapScope credential store.
+Milestone 0 continues to load and pass them through unchanged. Configuration
+files and process arguments containing them must be treated as secrets; values
+are redacted from logs, diagnostics, traces, metrics, panic reports, and audit
+payloads, and are never copied into capability packages, metadata caches, or
+generated hierarchy files. New provider fields and capability-package fields
+must use references or runtime injection rather than adding another literal
+secret location.
+
+Removing or migrating any grandfathered field requires a separate compatibility
+decision, tests for existing stdio, SSE, Streamable HTTP, outward HTTP, and
+remote-configuration deployments, plus migration guidance toward environment or
+external secret injection. CapScope does not grow this compatibility path into
+credential lifecycle management, IAM, or policy.
 
 ## 9. Latest MCP strategy
 
