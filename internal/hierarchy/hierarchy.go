@@ -3,6 +3,7 @@ package hierarchy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -473,12 +474,20 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 // ServerRegistry manages MCP client connections
 type ServerRegistry struct {
 	clients       map[string]ProviderClient
+	clientLoads   map[string]*providerLoad
 	clientMutex   map[string]*ClientMutex // Per-client mutex for serializing tool calls
 	serverConfigs map[string]*config.MCPClientConfigV2
 	clientFactory ProviderClientFactory
 	lifecycleCtx  context.Context
 	cancel        context.CancelFunc
-	mu            sync.RWMutex
+	mu            sync.Mutex
+	closed        bool
+}
+
+type providerLoad struct {
+	done   chan struct{}
+	client ProviderClient
+	err    error
 }
 
 // ProviderClient is the part of a downstream MCP client used by the hierarchy.
@@ -503,6 +512,7 @@ func newServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2, facto
 	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &ServerRegistry{
 		clients:       make(map[string]ProviderClient),
+		clientLoads:   make(map[string]*providerLoad),
 		clientMutex:   make(map[string]*ClientMutex),
 		serverConfigs: serverConfigs,
 		clientFactory: factory,
@@ -549,6 +559,10 @@ func (m *ClientMutex) LockContext(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-m.token:
+		if err := ctx.Err(); err != nil {
+			m.Unlock()
+			return err
+		}
 		return nil
 	}
 }
@@ -560,38 +574,54 @@ func (m *ClientMutex) Unlock() {
 // GetOrLoadServer gets an existing client or creates and initializes a new one
 // This implements lazy loading - servers are only started when first accessed
 func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string) (ProviderClient, error) {
-	// First check with read lock
-	r.mu.RLock()
-	if client, exists := r.clients[serverName]; exists {
-		r.mu.RUnlock()
-		return client, nil
-	}
-	r.mu.RUnlock()
-
-	// Need to create, use write lock
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Check again in case another goroutine created it
+	if r.closed {
+		r.mu.Unlock()
+		return nil, errors.New("server registry is closed")
+	}
 	if client, exists := r.clients[serverName]; exists {
+		r.mu.Unlock()
 		return client, nil
 	}
+	if load, exists := r.clientLoads[serverName]; exists {
+		r.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-load.done:
+			return load.client, load.err
+		}
+	}
 
-	// Look up the server config
 	cfg, exists := r.serverConfigs[serverName]
 	if !exists {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("server config not found: %s", serverName)
 	}
+	load := &providerLoad{done: make(chan struct{})}
+	r.clientLoads[serverName] = load
+	r.mu.Unlock()
 
 	mcpClient, err := r.clientFactory(ctx, serverName, cfg)
-	if err != nil {
+
+	r.mu.Lock()
+	if err == nil && r.closed {
+		err = errors.New("server registry closed while provider was starting")
+	}
+	if err == nil {
+		r.clients[serverName] = mcpClient
+		load.client = mcpClient
+	}
+	load.err = err
+	delete(r.clientLoads, serverName)
+	close(load.done)
+	r.mu.Unlock()
+
+	if err != nil && mcpClient != nil {
+		closeFailedProviderAsync(serverName, mcpClient)
 		return nil, err
 	}
-
-	// Store the client
-	r.clients[serverName] = mcpClient
-
-	return mcpClient, nil
+	return mcpClient, err
 }
 
 func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
@@ -743,15 +773,21 @@ func closeFailedProviderAsync(serverName string, provider ProviderClient) {
 // Close closes all clients in the registry
 func (r *ServerRegistry) Close() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
 	r.cancel()
 
-	for name, client := range r.clients {
+	clients := r.clients
+	r.clients = make(map[string]ProviderClient)
+	r.clientLoads = make(map[string]*providerLoad)
+	r.clientMutex = make(map[string]*ClientMutex)
+	r.mu.Unlock()
+
+	for name, client := range clients {
 		log.Printf("Closing MCP client: %s", name)
 		_ = client.Close()
 	}
-
-	// Clear the clients and mutex maps
-	r.clients = make(map[string]ProviderClient)
-	r.clientMutex = make(map[string]*ClientMutex)
 }

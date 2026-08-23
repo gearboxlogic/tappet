@@ -223,6 +223,119 @@ func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
 	}
 }
 
+func TestSlowProviderLoadDoesNotBlockOtherProviders(t *testing.T) {
+	providerAStarted := make(chan struct{})
+	releaseProviderA := make(chan struct{})
+	registry := newServerRegistry(characterizationConfigs(), func(_ context.Context, name string, _ *config.MCPClientConfigV2) (ProviderClient, error) {
+		if name == "provider-a" {
+			close(providerAStarted)
+			<-releaseProviderA
+		}
+		return ProviderClientFunc(func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText(name), nil
+		}), nil
+	})
+	defer registry.Close()
+
+	providerAResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		providerAResult <- err
+	}()
+	select {
+	case <-providerAStarted:
+	case <-time.After(time.Second):
+		t.Fatal("provider-a did not begin loading")
+	}
+
+	providerBResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-b")
+		providerBResult <- err
+	}()
+	select {
+	case err := <-providerBResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("provider-a startup blocked provider-b")
+	}
+
+	close(releaseProviderA)
+	require.NoError(t, <-providerAResult)
+}
+
+func TestConcurrentCallsShareOneProviderLoad(t *testing.T) {
+	loadStarted := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	var loadCount int
+	var loadMu sync.Mutex
+	provider := &staticProvider{}
+	registry := newServerRegistry(characterizationConfigs(), func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error) {
+		loadMu.Lock()
+		loadCount++
+		if loadCount == 1 {
+			close(loadStarted)
+		}
+		loadMu.Unlock()
+		<-releaseLoad
+		return provider, nil
+	})
+	defer registry.Close()
+
+	type loadResult struct {
+		client ProviderClient
+		err    error
+	}
+	results := make(chan loadResult, 2)
+	for range 2 {
+		go func() {
+			client, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+			results <- loadResult{client: client, err: err}
+		}()
+	}
+	<-loadStarted
+	time.Sleep(20 * time.Millisecond)
+	close(releaseLoad)
+
+	first := <-results
+	second := <-results
+	require.NoError(t, first.err)
+	require.NoError(t, second.err)
+	assert.Same(t, first.client, second.client)
+	loadMu.Lock()
+	assert.Equal(t, 1, loadCount)
+	loadMu.Unlock()
+}
+
+func TestProviderFinishingAfterRegistryCloseIsClosed(t *testing.T) {
+	loadStarted := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	provider := &signalCloseProvider{closed: make(chan struct{})}
+	registry := newServerRegistry(characterizationConfigs(), func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error) {
+		close(loadStarted)
+		<-releaseLoad
+		return provider, nil
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		result <- err
+	}()
+	<-loadStarted
+	registry.Close()
+	close(releaseLoad)
+
+	err := <-result
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registry closed")
+	select {
+	case <-provider.closed:
+	case <-time.After(time.Second):
+		t.Fatal("provider that finished after registry shutdown was not closed")
+	}
+}
+
 func TestSameProviderCallsAreSerialized(t *testing.T) {
 	h := loadCharacterizationHierarchy(t)
 	tracker := newConcurrencyTracker()
@@ -296,6 +409,20 @@ func TestCanceledCallStopsWaitingForSameProviderLock(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("call remained blocked on the provider lock after its deadline")
 	}
+	lock.Unlock()
+}
+
+func TestCanceledContextCannotAcquireAvailableProviderLock(t *testing.T) {
+	lock := NewClientMutex()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for range 100 {
+		err := lock.LockContext(ctx)
+		assert.ErrorIs(t, err, context.Canceled)
+	}
+
+	lock.Lock()
 	lock.Unlock()
 }
 
@@ -376,6 +503,28 @@ func (f ProviderClientFunc) CallTool(ctx context.Context, request mcp.CallToolRe
 }
 
 func (ProviderClientFunc) Close() error { return nil }
+
+type staticProvider struct{}
+
+func (*staticProvider) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultText("ok"), nil
+}
+
+func (*staticProvider) Close() error { return nil }
+
+type signalCloseProvider struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (*signalCloseProvider) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultText("ok"), nil
+}
+
+func (p *signalCloseProvider) Close() error {
+	p.once.Do(func() { close(p.closed) })
+	return nil
+}
 
 type blockingCloseProvider struct {
 	closeStarted chan struct{}
