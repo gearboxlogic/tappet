@@ -326,11 +326,13 @@ An inline `invoke` result keeps the downstream MCP result at the outer protocol
 level. CapScope forwards every provider content block, including image, audio,
 embedded-resource, and resource-link blocks, in the outer
 `CallToolResult.Content`; it also preserves `StructuredContent` and `IsError`.
-Because downstream `_meta` keys are arbitrary, CapScope uses a collision-safe
-proxy envelope at `_meta["io.capscope.proxy"]`. The complete original downstream
-`_meta` object is stored unchanged under `downstream_meta`, while broker fields
-go under `invocation`. Even a provider-defined `capscope` or
-`io.capscope.proxy` key therefore remains recoverable:
+For inline results, CapScope copies every provider-defined `_meta` entry to the
+same top-level key so unmodified consumers keep seeing the metadata paths they
+expect. Broker fields use the reserved envelope
+`_meta["io.capscope.proxy"]`. If and only if the provider already used that
+exact reserved key, CapScope stores its original value unchanged under
+`downstream_reserved_value` inside the proxy envelope; no other downstream key
+is moved or wrapped.
 
 ```json
 {
@@ -338,27 +340,33 @@ go under `invocation`. Even a provider-defined `capscope` or
   "structuredContent": {"provider": "value"},
   "isError": false,
   "_meta": {
+    "capscope": {"provider_owned": true},
     "io.capscope.proxy": {
       "invocation": {
         "invocation_id": "invocation:opaque-id",
         "disposition": "inline"
       },
-      "downstream_meta": {
-        "capscope": {"provider_owned": true}
-      }
+      "downstream_reserved_value": {"provider_owned_collision": true}
     }
   }
 }
 ```
 
+The `downstream_reserved_value` member is omitted when there was no collision.
+This one reserved-key exception is explicit because a JSON object cannot retain
+two different values at the same key; all noncolliding provider metadata keeps
+its original protocol-visible path.
+
 If the complete typed provider result exceeds the inline limit but remains
 within the accepted result limit, CapScope stores a lossless UTF-8 JSON encoding
 in a temporary spill object. `invoke` preserves the provider's outer `IsError`
 classification and returns compact spill metadata in
-`_meta["io.capscope.proxy"].invocation` and structured content. The original
-downstream metadata remains under `downstream_meta`. Its outer content contains
-only a bounded notice directing the caller to `capscope.read`; it never presents
-a partial provider content array as complete:
+`_meta["io.capscope.proxy"].invocation` and structured content. The complete
+original typed result, including the provider `_meta` object at its original
+keys, exists only inside the lossless spill. No provider metadata is copied into
+the spilled outer response because it may itself be what exceeded the inline
+limit. The outer content contains only a bounded notice directing the caller to
+`capscope.read`; it never presents a partial provider content array as complete:
 
 ```json
 {
@@ -420,7 +428,7 @@ After bounded decoding, V1 applies these tool-input limits before dispatch:
 | cursor or artifact `ref` | 2,048 bytes |
 | `include` values | 8 entries, 64 bytes each |
 | `operation_schemas` | 32 exact IDs |
-| `limit` | 100 items |
+| `limit` or `child_limit` | 100 items each |
 | `max_bytes` requested from `read` | 64 KiB decoded |
 | normalized `invoke.arguments` | 256 KiB encoded JSON |
 
@@ -675,11 +683,21 @@ Input:
 {
   "query": "debug failing GitHub Actions checks",
   "path": "software.github",
-  "limit": 8
+  "limit": 8,
+  "child_limit": 50,
+  "child_cursor": null
 }
 ```
 
-Output: compact capability cards, exact-match indicators, scores, and child paths.
+Output: at most `limit` compact capability cards with exact-match indicators and
+scores, plus one lexically ordered page of direct child paths beneath `path`.
+The child collection reports `total_children` and an opaque
+`next_child_cursor`; `child_limit` has a finite maximum of 100 and may be zero
+when the caller does not need hierarchy browsing. The cursor binds the catalog
+generation and requested path, so a changed catalog or path returns an explicit
+stale-cursor error instead of skipping or duplicating branches. Card ranking and
+child pagination are independent, and the combined response remains subject to
+the broker response-size limit.
 
 ### `capscope.describe`
 
@@ -787,10 +805,11 @@ Input:
 
 Output: the provider's native MCP content blocks, structured content, and
 `isError` at the outer `CallToolResult` level when inline, with CapScope metadata
-under `_meta["io.capscope.proxy"].invocation` and the complete original provider
-metadata under `downstream_meta`. An oversized accepted result returns the spill
-metadata and result reference defined in section 6.5.1 without partial provider
-content.
+under `_meta["io.capscope.proxy"].invocation` and all noncolliding provider
+metadata at its original top-level `_meta` keys. An oversized accepted result
+returns only bounded proxy metadata plus the spill reference defined in section
+6.5.1; retrieving and decoding the spill restores the complete original result,
+including provider metadata, without partial provider content.
 
 The first implementation may use fewer meta-tools if one union schema proves materially cheaper without harming validation. Benchmark the interface rather than assuming that the smallest tool count is automatically best.
 
