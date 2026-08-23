@@ -11,7 +11,7 @@ A capability is a dynamically discoverable package containing some combination o
 - Agent Skills-compatible procedural knowledge
 - executable operations backed by providers
 - selectively readable context or reference material
-- provider bindings and lifecycle configuration
+- provider bindings
 
 CapScope is not a general agent framework.
 
@@ -56,7 +56,7 @@ CapScope owns:
 
 CapScope does not own:
 
-- authentication or identity issuance
+- provider authentication or identity issuance
 - authorization, RBAC, ABAC, or production policy
 - credential lifecycle or secret storage
 - human approval systems
@@ -69,6 +69,14 @@ CapScope does not own:
 - arbitrary script execution
 
 External providers remain responsible for enforcing whether an operation is authorized.
+
+The inherited HTTP server has a narrow whole-endpoint access gate:
+`internal/server.newAuthMiddleware` checks static bearer tokens from
+`mcpProxy.options.authTokens`. Retain that behavior while establishing the
+baseline, but do not treat it as capability authorization, provider
+authentication, credential management, or an identity system. The capability
+core must not depend on it. Any later removal or replacement requires an
+explicit compatibility decision and migration guidance for HTTP deployments.
 
 ## Core invariants
 

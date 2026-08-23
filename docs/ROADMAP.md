@@ -83,6 +83,7 @@ Work:
 - optional path-constrained search
 - explainable match reasons
 - `describe` materialization
+- exact operation-schema selectors in `describe`
 - Agent Skill body reads
 - individual reference reads
 - output bounds
@@ -100,6 +101,7 @@ Exit criteria:
 - 100% exact-ID recall
 - agreed top-5 natural-language recall target on a versioned corpus
 - no unrelated full skill bodies or operation schemas in search output
+- `describe` returns full schemas only for explicitly selected operation IDs
 - deterministic results across runs
 
 ## Milestone 4: Provider manager and metadata cache
@@ -118,7 +120,7 @@ Work:
 - different-provider parallelism
 - explicit refresh
 - conservative cache invalidation
-- bounded output handling
+- bounded inline output plus lossless spill and chunked retrieval
 - lifecycle status and telemetry
 
 Exit criteria:
@@ -127,7 +129,7 @@ Exit criteria:
 - first invoke starts only the selected provider
 - idle provider stops and reconnects on next invoke
 - stale schemas are detected
-- large output cannot silently consume unbounded model context
+- large output cannot silently consume unbounded model context or lose structured content
 
 ## Milestone 5: Portable broker vertical slice
 
