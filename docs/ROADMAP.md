@@ -42,6 +42,7 @@ Work:
 - preserve structured content, output schemas, result types, and errors
 - advertise no unsupported provider-to-client callback capabilities
 - reject unsolicited multi-round-trip callbacks promptly and observably
+- enforce downstream byte, nesting, and syntax-node budgets before SDK decoding
 - run official MCP conformance suites in CI
 - add dual-era downstream fixtures
 
@@ -77,6 +78,8 @@ Exit criteria:
 - FIFOs, devices, sockets, directories, and other non-regular package artifacts
   fail without blocking or reading from them
 - no provider credentials appear in packages
+- validation and normalized records use private staged bytes even when source
+  files mutate during installation
 - current tool mappings can be represented without loss
 
 ## Milestone 3: Catalog search and progressive reads
@@ -212,8 +215,8 @@ Measure:
 Exit criteria:
 
 - fixed initial surface independent of catalog size
-- broker and downstream nesting limits are enforced during tokenization before
-  general JSON object construction
+- broker and downstream nesting and syntax-node limits are enforced during
+  tokenization before general JSON object construction
 - irrelevant capabilities do not enter the transcript
 - provider authorization still applies
 - structured result survives proxying
@@ -227,6 +230,9 @@ Exit criteria:
   original `isError` classification, and is explicitly unsafe to retry
 - resources referenced by a spilled result remain live through result retrieval
   plus the bounded link-use grace period
+- every enabled cross-call handle resolves through shared storage or explicit
+  handle-routed replica affinity; unsupported replicated configurations fail at
+  startup
 - results beat eager exposure on context size without unacceptable task-success loss
 
 ## Milestone 6: Scale and retrieval evaluation
