@@ -131,7 +131,11 @@ Exit criteria:
   including after reinstall or uninstall
 - every prepared artifact chunk, including the first, remains exactly retryable
   until receipt is proven or its bounded lease deadline passes
+- concurrent requests cannot advance one continuation lease along competing
+  chunk boundaries
 - large capability structures remain completely retrievable across stable pages
+- routine provider refreshes and package changes do not invalidate an active
+  immutable `describe` projection
 - deterministic results across runs
 
 ## Milestone 4: Provider manager and metadata cache
@@ -192,6 +196,8 @@ Exit criteria:
   continuation lease even when its original start-by deadline passes
 - every prepared spill chunk remains exactly replayable until receipt is proven
   or its bounded replay deadline passes
+- JSON number lexemes survive invocation validation, provider forwarding, and
+  structured result or error preservation without `float64` rounding
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
 - duplicate provider tool names across one metadata refresh reject the snapshot
   before map insertion or schema selection
@@ -240,6 +246,8 @@ Exit criteria:
 - fixed initial surface independent of catalog size
 - global and per-method broker admission bounds reject or backpressure overload
   before retaining unbounded request state
+- pre-decode header, body, and frame deadlines release ingress reservations held
+  by stalled clients
 - broker and downstream nesting and syntax-node limits are enforced during
   tokenization before general JSON object construction
 - irrelevant capabilities do not enter the transcript
@@ -249,6 +257,8 @@ Exit criteria:
   route without exposing unrelated provider resources
 - plaintext downstream resource URIs are discarded after materialization and
   never persist in snapshots or telemetry
+- standard URI fields nested in snapshotted resource contents are rewritten to
+  broker-owned opaque URIs before storage
 - failed result publication releases staged resource capacity and preserves any
   structured downstream resource-read error
 - resource-read error spills commit independently after staged resource handles
@@ -260,6 +270,8 @@ Exit criteria:
 - every enabled cross-call handle resolves through shared storage or explicit
   handle-routed replica affinity; unsupported replicated configurations fail at
   startup
+- replicated garbage collection treats unexpired shared continuation leases as
+  durable roots and cannot reclaim another replica's leased snapshot
 - results beat eager exposure on context size without unacceptable task-success loss
 
 ## Milestone 6: Scale and retrieval evaluation

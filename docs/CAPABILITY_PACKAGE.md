@@ -403,6 +403,11 @@ same protection if reinstall races delivery. Each response reports the
 effective expiry. Counts of live handles, replay records, and retained bytes
 have finite operator-configurable quotas, and admission failure returns a typed
 error before promising retrieval.
+Continuation advancement is serialized per lease and uses a monotonic
+generation compare-and-swap. At one expected offset, the first exact request
+tuple commits; an identical competitor receives its replay and a different
+`max_bytes` receives bounded `continuation_conflict` without changing lease
+state. Only the committed response's `next_offset` can advance the generation.
 Garbage collection may delete a superseded or uninstalled snapshot only after
 both its registry count and continuation-lease count reach zero. Identical
 content-addressed objects shared by active snapshots remain live until the
@@ -411,9 +416,14 @@ implicit connection or MCP session state.
 
 Reinstall and uninstall schedule collection, and quota admission runs collection
 before rejecting a new snapshot. Startup removes abandoned temporary writes and
-performs a mark-and-sweep from the durable installed registry, since in-memory
-lease counts do not survive a process exit. If live registry data still consumes
-the aggregate quota, installation fails explicitly with
+performs a mark-and-sweep from the durable installed registry. A replicated
+shared store also persists active continuation-lease and replay records and
+includes every unexpired record as a sweep root. Collection is transactionally
+or epoch-fenced so one replica cannot reclaim a snapshot leased by another. An
+owner-routed store sweeps only its durable owner namespace. Registry-only startup
+sweeping is permitted solely for a non-replicated process-local store, where no
+handle remains routable after process exit. If live registry or lease-rooted data
+still consumes the aggregate quota, installation fails explicitly with
 `snapshot_quota_exceeded`; garbage collection never deletes a live generation
 merely to make room.
 
