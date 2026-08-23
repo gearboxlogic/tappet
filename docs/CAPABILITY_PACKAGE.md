@@ -2,13 +2,13 @@
 
 Status: **V1-alpha design proposal**
 
-This document defines the durable package model CapScope should implement before introducing broader runtime features.
+This document defines the durable package model Tappet should implement before introducing broader runtime features.
 
 ## 1. Package goals
 
 A package must:
 
-- give CapScope compact discovery metadata
+- give Tappet compact discovery metadata
 - reference Agent Skills without copying their format
 - select a bounded set of executable operations
 - bind operations to providers without making provider identity the capability identity
@@ -26,7 +26,7 @@ Proposed layout:
 ```text
 capabilities/
 └── software.github.ci-debugging/
-    ├── capscope.yaml
+    ├── tappet.yaml
     ├── skills/
     │   └── github-actions-debugging/
     │       ├── SKILL.md
@@ -36,12 +36,12 @@ capabilities/
         └── repository-conventions.md
 ```
 
-Skills must follow the open Agent Skills specification. CapScope-specific metadata belongs in `capscope.yaml`, not in proprietary additions to `SKILL.md`.
+Skills must follow the open Agent Skills specification. Tappet-specific metadata belongs in `tappet.yaml`, not in proprietary additions to `SKILL.md`.
 
 ## 3. Minimal manifest
 
 ```yaml
-apiVersion: capscope.gearboxlogic.dev/v1alpha1
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
 kind: Capability
 
 metadata:
@@ -146,7 +146,7 @@ limits before registering a capability:
 | complete normalized base card | 4,096 encoded JSON bytes |
 
 Invalid UTF-8 or any exceeded field, count, or aggregate limit rejects the
-package. CapScope does not truncate discovery metadata. These V1-alpha limits
+package. Tappet does not truncate discovery metadata. These V1-alpha limits
 may change only through an explicit format revision and benchmark update.
 
 ## 5. Hierarchy
@@ -185,7 +185,7 @@ collection with a skill-local stable `id`, `kind: reference`, and a normalized
 path relative to the skill directory. The path must remain inside that skill
 directory and pass the package containment rules. Unlisted files, including a
 file merely linked from `SKILL.md`, are not indexed, snapshotted, counted, or
-exposed by CapScope.
+exposed by Tappet.
 
 Installation snapshots every listed resource and assigns an opaque artifact
 reference binding the package version and manifest digest, skill digest,
@@ -195,7 +195,7 @@ metadata: ID, media type, byte count, digest, and the exact artifact reference.
 chunks. A changed package or skill produces a new reference; an old binding
 returns a typed stale-reference result instead of resolving by current path.
 
-CapScope should index:
+Tappet should index:
 
 - `name`
 - `description`
@@ -203,7 +203,7 @@ CapScope should index:
 - digest
 - optional compatibility metadata
 
-CapScope should defer:
+Tappet should defer:
 
 - full `SKILL.md` body
 - explicitly listed supporting references
@@ -217,10 +217,10 @@ and execution-boundary rules; listing a script would never make it executable.
 ### Skill boundaries
 
 - `SKILL.md` is procedural knowledge.
-- A script bundled with a skill is an artifact, not automatically a CapScope operation.
+- A script bundled with a skill is an artifact, not automatically a Tappet operation.
 - `allowed-tools` is an experimental Agent Skills hint, not authorization.
 - Provider bindings live in the capability manifest.
-- CapScope must validate skills with the official reference validator where practical.
+- Tappet must validate skills with the official reference validator where practical.
 
 ### Bounded `SKILL.md` validation
 
@@ -234,7 +234,7 @@ scanning syntax events, before alias resolution or semantic allocation.
 Only the resulting bounded metadata record is passed to the Agent Skills
 reference validation path. If the official validator API reparses raw
 frontmatter without equivalent reader, depth, node, and alias-expansion limits,
-CapScope must place a bounded adapter in front of it or reject the skill; it must
+Tappet must place a bounded adapter in front of it or reject the skill; it must
 not hand untrusted package bytes to an unbounded parser. The complete bounded
 `SKILL.md` is copied into private immutable staging before parsing, and both
 metadata and body are published from those exact staged bytes only after
@@ -274,7 +274,7 @@ Provider-specific executable name. For MCP V1, this is the downstream tool name.
 
 The downstream provider owns the executable input and output schemas.
 
-CapScope caches those schemas and records a digest. The manifest may later permit a stricter compatibility schema or fixture, but V1 should not duplicate every provider schema in YAML.
+Tappet caches those schemas and records a digest. The manifest may later permit a stricter compatibility schema or fixture, but V1 should not duplicate every provider schema in YAML.
 
 Provider ownership does not authorize schema-driven I/O or unbounded
 validation. V1 accepts only bounded, self-contained schemas with same-document
@@ -305,7 +305,7 @@ V1 rules:
 
 ### Package path containment
 
-CapScope resolves the configured package root to a canonical absolute path and
+Tappet resolves the configured package root to a canonical absolute path and
 opens a directory handle for that root. Every package-relative component is
 then opened relative to the preceding directory handle with no-follow and
 beneath-root semantics. On Linux this means `openat2` with
@@ -317,7 +317,7 @@ or reparse-point components, and non-directory intermediate components.
 
 Every final manifest, `SKILL.md`, context entry, and listed resource is opened
 descriptor-relative with no-follow and nonblocking semantics before any read.
-On Unix this includes `O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`. CapScope immediately
+On Unix this includes `O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`. Tappet immediately
 uses `fstat` on that descriptor and accepts only a regular file; directories,
 FIFOs, sockets, block or character devices, and every other special type are
 rejected. `O_NONBLOCK` prevents a FIFO open from waiting for a writer, and no
@@ -325,9 +325,9 @@ bytes are read from a device or other rejected descriptor. Platforms that
 cannot provide an equivalent nonblocking type check must reject local package
 ingestion rather than attempt a possibly blocking open.
 
-CapScope never validates bytes from the mutable source descriptor. Immediately
+Tappet never validates bytes from the mutable source descriptor. Immediately
 after the regular-file check, it copies each candidate manifest or artifact
-through a bounded reader into a private CapScope-owned staging object while
+through a bounded reader into a private Tappet-owned staging object while
 computing its length and digest. It then closes the source, durably finishes the
 staging write, prevents further writes to that object, and performs parsing,
 reference checks, Agent Skills validation, and normalization only through a
@@ -337,7 +337,7 @@ differ from the bytes that were validated.
 
 The staged manifest is parsed first to identify its bounded artifact set; every
 referenced candidate is then staged before cross-file validation. If any copy,
-digest, or validation fails, CapScope deletes all private staging objects and
+digest, or validation fails, Tappet deletes all private staging objects and
 does not change the registry. Only after the complete staged set validates does
 it atomically commit those same objects into the immutable content-addressed
 snapshot and publish the normalized record with their recorded lengths and
@@ -361,7 +361,7 @@ Invocation resolution atomically leases one immutable registry generation and
 its exact operation record, provider binding, provider-configuration
 fingerprint before the invocation enters any queue. It does not pin a provider
 metadata generation or schema digest at queue admission. At dispatch, after any
-refresh required by `ARCHITECTURE.md` section 6.7, CapScope atomically selects
+refresh required by `ARCHITECTURE.md` section 6.7, Tappet atomically selects
 the current mapped tool and schema for the leased binding, validates the
 arguments against that schema, and leases that metadata generation and digest
 through transmission and terminal publication. If the current provider
@@ -375,7 +375,7 @@ a new binding, or close the leased provider generation during a transmitted
 call. Old provider state remains subject to the global residency budget.
 
 If resolution cannot acquire a generation lease because retirement has already
-begun, CapScope may re-resolve entirely against the new generation before
+begun, Tappet may re-resolve entirely against the new generation before
 transmitting bytes. It must revalidate the provider binding as one unit and then
 perform the same dispatch-time current-schema selection and argument validation,
 or return typed `operation_generation_stale`; it never mixes package or binding
@@ -436,7 +436,7 @@ because another writer can swap a component between those operations.
 
 MCP resources may be added as a context source after the local-file vertical slice.
 
-Context is not memory. CapScope does not decide what should be remembered across conversations.
+Context is not memory. Tappet does not decide what should be remembered across conversations.
 
 ## 9. Providers
 
@@ -501,7 +501,7 @@ canonical encoded JSON representation. These limits cover material returned by
 
 | Structure | Limit |
 | --- | ---: |
-| encoded `capscope.yaml` input | 1 MiB |
+| encoded `tappet.yaml` input | 1 MiB |
 | YAML nesting depth | 64 |
 | YAML syntax nodes | 16,384 |
 | YAML aliases, anchors, or merge keys | 0 |
@@ -534,7 +534,7 @@ canonical encoded JSON representation. These limits cover material returned by
 | all normalized structure metadata | 512 KiB encoded JSON |
 
 Invalid UTF-8 or any exceeded field, item, count, manifest, or aggregate limit
-rejects the package; CapScope never truncates a structure entry. Referenced
+rejects the package; Tappet never truncates a structure entry. Referenced
 artifact bodies and provider-owned schemas have their own bounded-ingestion
 limits because they are not structure metadata.
 
@@ -617,7 +617,7 @@ The current JSON hierarchy can be migrated incrementally:
 
 1. Treat each existing hierarchy leaf as an operation group.
 2. Convert `server` and `maps_to` into provider bindings.
-3. Generate a candidate `capscope.yaml`.
+3. Generate a candidate `tappet.yaml`.
 4. Preserve manually written descriptions.
 5. Require review before accepting generated capability boundaries.
 6. Add skills and context manually where they add procedural value.
