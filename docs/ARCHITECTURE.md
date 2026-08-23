@@ -323,9 +323,12 @@ Schema references include the provider fingerprint and schema digest; a cache
 refresh invalidates references whose digest changed.
 
 An inline `invoke` result keeps the downstream MCP result at the outer protocol
-level. CapScope forwards every provider content block, including image, audio,
-embedded-resource, and resource-link blocks, in the outer
-`CallToolResult.Content`; it also preserves `StructuredContent` and `IsError`.
+level. CapScope forwards every provider content block in the outer
+`CallToolResult.Content`; text, image, audio, and embedded-resource blocks remain
+unchanged. A resource-link block keeps its name, title, description, media type,
+and annotations, but its provider-scoped URI is rewritten to the resolvable
+broker URI defined in section 6.5.3. CapScope also preserves
+`StructuredContent` and `IsError`.
 For inline results, CapScope copies every provider-defined `_meta` entry to the
 same top-level key so unmodified consumers keep seeing the metadata paths they
 expect. Broker fields use the reserved envelope
@@ -362,11 +365,12 @@ within the accepted result limit, CapScope stores a lossless UTF-8 JSON encoding
 in a temporary spill object. `invoke` preserves the provider's outer `IsError`
 classification and returns compact spill metadata in
 `_meta["io.capscope.proxy"].invocation` and structured content. The complete
-original typed result, including the provider `_meta` object at its original
-keys, exists only inside the lossless spill. No provider metadata is copied into
-the spilled outer response because it may itself be what exceeded the inline
-limit. The outer content contains only a bounded notice directing the caller to
-`capscope.read`; it never presents a partial provider content array as complete:
+complete broker-adapted typed result, including the provider `_meta` object at
+its original keys and any scoped resource-link rewrites, exists only inside the
+lossless spill. No provider metadata is copied into the spilled outer response
+because it may itself be what exceeded the inline limit. The outer content
+contains only a bounded notice directing the caller to `capscope.read`; it never
+presents a partial provider content array as complete:
 
 ```json
 {
@@ -386,8 +390,8 @@ Each result or error spill reference is an opaque application handle. A caller
 retrieves it through bounded `read` calls using an offset and maximum decoded
 byte count. Each byte range is base64 encoded, and each response reports the
 next offset and whether the spill is complete. Reassembly preserves the complete
-typed MCP result or JSON-RPC error. If storage fails, `invoke` returns an
-explicit bounded-output error instead of a partial value.
+broker-adapted typed MCP result or original JSON-RPC error. If storage fails,
+`invoke` returns an explicit bounded-output error instead of a partial value.
 
 A downstream JSON-RPC error is not an MCP `CallToolResult` and follows the same
 bounded-preservation rule separately. When the complete encoded error object
@@ -447,10 +451,20 @@ stateless horizontal-scaling design.
 Broker inputs are bounded before JSON decoding. V1 accepts at most 1 MiB of
 encoded JSON-RPC request data per message. HTTP rejects an oversized declared
 body and applies a limited reader to chunked or undeclared bodies. Stdio and
-other framed transports stop reading and reject a message once the frame limit
-is reached; they must not accumulate an unbounded line or frame first. A
-transport or SDK integration that cannot enforce this pre-decode boundary is
-not supported on an untrusted broker endpoint.
+other framed transports stop reading once the frame limit is reached; they must
+not accumulate an unbounded line or frame first. A transport or SDK integration
+that cannot enforce this pre-decode boundary is not supported on an untrusted
+broker endpoint.
+
+An oversized inbound message invalidates the affected transport. CapScope may
+emit a bounded `broker_frame_limit_exceeded` response when the framing still
+permits it, but then closes the connection or session before accepting another
+request. In particular, a newline-delimited stdio server exits or closes its
+input instead of interpreting the unread remainder as a second message. HTTP
+returns a bounded 413 response and forces the request connection closed;
+streaming transports close the stream. V1 does not perform unbounded draining
+or attempt in-place resynchronization after the frame boundary is lost. A client
+may continue only through a fresh transport connection.
 
 After bounded decoding, V1 applies these tool-input limits before dispatch:
 
@@ -473,6 +487,39 @@ access, provider startup, or spill allocation. The outer 1 MiB limit remains
 authoritative even when individual fields are below their limits. Deployments
 may set smaller limits, but changing these V1-alpha maxima requires an explicit
 architecture and benchmark update.
+
+#### 6.5.3 Scoped provider resource links
+
+A downstream `resource-link` URI is scoped to the provider connection that
+returned it; forwarding that URI without a read route would create a dangling
+link. Before publishing an invocation result containing such a block, CapScope
+uses that same initialized provider session to call downstream
+`resources/read`. It accepts at most 32 links per result, snapshots each complete
+typed resource response under finite per-resource and aggregate byte quotas,
+and reserves all snapshot capacity atomically before returning the tool result.
+The block URI is then rewritten to an unguessable
+`capscope-resource://<opaque-handle>` URI. All other block fields remain
+unchanged, and the snapshot record retains the original provider URI, provider
+fingerprint, content digest, and invocation ID for diagnostics and stale checks.
+
+The outward broker advertises MCP resource support for a scoped
+`resources/read` route. Reading the rewritten URI returns the exact snapshotted
+typed resource contents without restarting or consulting the provider.
+`resources/list` does not enumerate ephemeral handles, and arbitrary provider
+URIs are rejected; possession of the broker-issued URI is required. A snapshot
+is admitted only when its complete `resources/read` response fits the broker
+resource-response limit, so this route never truncates or flattens resource
+contents. Handles expire under the same bounded temporary-store rules as spill
+objects and are bearer secrets excluded from telemetry.
+
+If the provider does not support `resources/read`, the link cannot be read in
+the current session, any link or byte quota is exceeded, or snapshot admission
+fails, `invoke` returns a bounded `resource_link_unmaterializable` preservation
+error. It does not emit a dangling rewritten link, a partial resource snapshot,
+or a provider URI that the CapScope-connected harness cannot resolve. This
+scoped proxy does not expose a provider-wide resource catalog and does not add
+dynamic tools; implementing it belongs to the portable broker milestone, not
+Milestone 0.
 
 ### 6.6 Provider manager
 
@@ -784,16 +831,19 @@ schema artifact reference for each operation ID named in `operation_schemas`.
 Page items are ordered by section and stable ID. The response includes total
 counts and an opaque `next_cursor`; `limit` has a finite maximum. At the first
 page, `describe` atomically captures one projection generation containing the
-capability version and digest plus the ordered metadata-cache generation IDs for
-every provider relevant to the requested structure. The cursor binds that
-projection generation and the requested `include` set. A package change,
+capability version and digest plus the ordered metadata-cache generation IDs,
+including the explicit empty-cache generation, for every provider referenced by
+the capability. It captures all capability providers even when the initial
+`include` set contains only provider-independent structure. The cursor binds
+that projection generation and the requested `include` set. A package change,
 provider metadata refresh, empty-cache transition, or structure-selector change
 invalidates the cursor and returns an explicit stale-cursor error instead of
 mixing package or operation metadata snapshots. `operation_schemas` is an
-independent exact selector and may be supplied on any page, but it is resolved
-against the same bound projection generation; selected schema content counts
-toward that response's size bound without changing the structure cursor.
-Individual metadata entries are subject to package validation limits.
+independent exact selector and may first appear on any page because every
+possible operation provider is already in the bound projection; the selector is
+resolved against that generation. Selected schema content counts toward the
+response's size bound without changing the structure cursor. Individual
+metadata entries are subject to package validation limits.
 
 Each operation card with cached metadata includes its schema reference, digest,
 observation time, and freshness state. With an empty cache it instead reports
@@ -855,9 +905,9 @@ Output:
 }
 ```
 
-Reassembling the decoded byte ranges yields the complete typed provider result
-or original JSON-RPC error represented by the spill object. The digest verifies
-the reassembled value.
+Reassembling the decoded byte ranges yields the complete broker-adapted typed
+provider result or original JSON-RPC error represented by the spill object. The
+digest verifies the reassembled value.
 `offset`, `next_offset`, `max_bytes`, and `stored_bytes` count decoded bytes in
 the stored UTF-8 JSON representation, not base64 characters.
 
