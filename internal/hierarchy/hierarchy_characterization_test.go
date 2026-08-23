@@ -307,6 +307,56 @@ func TestConcurrentCallsShareOneProviderLoad(t *testing.T) {
 	loadMu.Unlock()
 }
 
+func TestLiveWaiterRetriesLoadCanceledByInitiatingCaller(t *testing.T) {
+	firstLoadStarted := make(chan struct{})
+	var loadCount int
+	var loadMu sync.Mutex
+	provider := &staticProvider{}
+	registry := newServerRegistry(characterizationConfigs(), func(ctx context.Context, _ string, _ *config.MCPClientConfigV2) (ProviderClient, error) {
+		loadMu.Lock()
+		loadCount++
+		currentLoad := loadCount
+		loadMu.Unlock()
+		if currentLoad == 1 {
+			close(firstLoadStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return provider, nil
+	})
+	defer registry.Close()
+
+	initiatorCtx, cancelInitiator := context.WithCancel(context.Background())
+	initiatorResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(initiatorCtx, "provider-a")
+		initiatorResult <- err
+	}()
+	<-firstLoadStarted
+
+	waiterResult := make(chan struct {
+		client ProviderClient
+		err    error
+	}, 1)
+	go func() {
+		client, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		waiterResult <- struct {
+			client ProviderClient
+			err    error
+		}{client: client, err: err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancelInitiator()
+
+	assert.ErrorIs(t, <-initiatorResult, context.Canceled)
+	waiter := <-waiterResult
+	require.NoError(t, waiter.err)
+	assert.Same(t, provider, waiter.client)
+	loadMu.Lock()
+	assert.Equal(t, 2, loadCount)
+	loadMu.Unlock()
+}
+
 func TestProviderFinishingAfterRegistryCloseIsClosed(t *testing.T) {
 	loadStarted := make(chan struct{})
 	releaseLoad := make(chan struct{})

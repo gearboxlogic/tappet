@@ -574,54 +574,62 @@ func (m *ClientMutex) Unlock() {
 // GetOrLoadServer gets an existing client or creates and initializes a new one
 // This implements lazy loading - servers are only started when first accessed
 func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string) (ProviderClient, error) {
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return nil, errors.New("server registry is closed")
-	}
-	if client, exists := r.clients[serverName]; exists {
-		r.mu.Unlock()
-		return client, nil
-	}
-	if load, exists := r.clientLoads[serverName]; exists {
-		r.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-load.done:
-			return load.client, load.err
+	for {
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return nil, errors.New("server registry is closed")
 		}
-	}
+		if client, exists := r.clients[serverName]; exists {
+			r.mu.Unlock()
+			return client, nil
+		}
+		if load, exists := r.clientLoads[serverName]; exists {
+			r.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-load.done:
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if errors.Is(load.err, context.Canceled) || errors.Is(load.err, context.DeadlineExceeded) {
+					continue
+				}
+				return load.client, load.err
+			}
+		}
 
-	cfg, exists := r.serverConfigs[serverName]
-	if !exists {
+		cfg, exists := r.serverConfigs[serverName]
+		if !exists {
+			r.mu.Unlock()
+			return nil, fmt.Errorf("server config not found: %s", serverName)
+		}
+		load := &providerLoad{done: make(chan struct{})}
+		r.clientLoads[serverName] = load
 		r.mu.Unlock()
-		return nil, fmt.Errorf("server config not found: %s", serverName)
-	}
-	load := &providerLoad{done: make(chan struct{})}
-	r.clientLoads[serverName] = load
-	r.mu.Unlock()
 
-	mcpClient, err := r.clientFactory(ctx, serverName, cfg)
+		mcpClient, err := r.clientFactory(ctx, serverName, cfg)
 
-	r.mu.Lock()
-	if err == nil && r.closed {
-		err = errors.New("server registry closed while provider was starting")
-	}
-	if err == nil {
-		r.clients[serverName] = mcpClient
-		load.client = mcpClient
-	}
-	load.err = err
-	delete(r.clientLoads, serverName)
-	close(load.done)
-	r.mu.Unlock()
+		r.mu.Lock()
+		if err == nil && r.closed {
+			err = errors.New("server registry closed while provider was starting")
+		}
+		if err == nil {
+			r.clients[serverName] = mcpClient
+			load.client = mcpClient
+		}
+		load.err = err
+		delete(r.clientLoads, serverName)
+		close(load.done)
+		r.mu.Unlock()
 
-	if err != nil && mcpClient != nil {
-		closeFailedProviderAsync(serverName, mcpClient)
-		return nil, err
+		if err != nil && mcpClient != nil {
+			closeFailedProviderAsync(serverName, mcpClient)
+			return nil, err
+		}
+		return mcpClient, err
 	}
-	return mcpClient, err
 }
 
 func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
