@@ -235,8 +235,10 @@ Only the resulting bounded metadata record is passed to the Agent Skills
 reference validation path. If the official validator API reparses raw
 frontmatter without equivalent reader, depth, node, and alias-expansion limits,
 CapScope must place a bounded adapter in front of it or reject the skill; it must
-not hand untrusted package bytes to an unbounded parser. The `SKILL.md` body is
-snapshotted only after both bounded parsing and reference validation succeed.
+not hand untrusted package bytes to an unbounded parser. The complete bounded
+`SKILL.md` is copied into private immutable staging before parsing, and both
+metadata and body are published from those exact staged bytes only after
+reference validation succeeds.
 
 ## 7. Operations
 
@@ -323,12 +325,23 @@ bytes are read from a device or other rejected descriptor. Platforms that
 cannot provide an equivalent nonblocking type check must reject local package
 ingestion rather than attempt a possibly blocking open.
 
-Validation and snapshot copying use that same verified regular-file descriptor;
-CapScope never validates a pathname and later reopens that pathname for use. During
-installation it copies every accepted manifest and artifact through bounded
-readers into a CapScope-owned, immutable content-addressed snapshot while
-computing the digest. It publishes artifact references only after the complete
-snapshot has been atomically committed with the recorded length and digest.
+CapScope never validates bytes from the mutable source descriptor. Immediately
+after the regular-file check, it copies each candidate manifest or artifact
+through a bounded reader into a private CapScope-owned staging object while
+computing its length and digest. It then closes the source, durably finishes the
+staging write, prevents further writes to that object, and performs parsing,
+reference checks, Agent Skills validation, and normalization only through a
+read-only descriptor for the staged bytes. A concurrent source rewrite may
+change what the bounded copy observes, but it cannot make the published bytes
+differ from the bytes that were validated.
+
+The staged manifest is parsed first to identify its bounded artifact set; every
+referenced candidate is then staged before cross-file validation. If any copy,
+digest, or validation fails, CapScope deletes all private staging objects and
+does not change the registry. Only after the complete staged set validates does
+it atomically commit those same objects into the immutable content-addressed
+snapshot and publish the normalized record with their recorded lengths and
+digests. It never validates a pathname and later reopens that pathname for use.
 Subsequent `read` calls use that installed snapshot, not the mutable source
 descriptor, and verify the stored length and digest before returning bytes.
 Changing a source package requires an explicit reinstall that creates a new

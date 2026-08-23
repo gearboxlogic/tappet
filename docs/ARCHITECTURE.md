@@ -511,9 +511,22 @@ handle only through an irreversible keyed digest produced with a
 telemetry-specific secret; that digest is never accepted by `read`. Result
 handles are not MCP protocol sessions and must not carry hidden capability
 activation state. A single-process V1 may use local storage. A replicated
-deployment must use a shared bounded spill store addressable by result reference
-or explicitly disable spill retrieval; process-local handles alone are not a
-stateless horizontal-scaling design.
+deployment must make every handle-backed object and its atomic lease/replay
+state resolvable across requests. This includes result and error spills,
+rewritten provider resources, artifact and spill continuation handles, and final
+response replay records. It may use a shared bounded store addressable by opaque
+handle, or encode authenticated owner-replica routing in the handle and enforce
+explicit affinity for the handle's full published lifetime. Affinity is derived
+from the application handle, never an implicit MCP session or client connection.
+
+If neither shared storage nor handle-routed affinity is available, the
+deployment must disable every path that can emit an affected handle and return
+a typed configuration or materialization error instead. Disabling spill
+retrieval alone is insufficient because inline results may emit resource handles
+and `read` may emit continuation or replay state. Startup validation rejects a
+multi-replica configuration whose enabled handle-producing paths have no shared
+or routable store. Process-local handles alone are not a stateless
+horizontal-scaling design.
 
 #### 6.5.2 Bounded broker requests
 
@@ -523,10 +536,12 @@ oversized declared body and applies a limited reader to chunked or undeclared
 bodies. Stdio and other framed transports stop reading once the frame limit is
 reached; they must not accumulate an unbounded line or frame first. A
 depth-aware tokenizing decoder then rejects invalid UTF-8 or syntax and stops as
-soon as object or array nesting would exceed 64; it never materializes nodes
-beyond that depth. A transport or SDK integration that cannot enforce the byte
-and token-depth boundaries below its general object decoder is not supported on
-an untrusted broker endpoint.
+soon as object or array nesting would exceed 64 or the message would exceed
+131,072 JSON syntax nodes. Each object member name, scalar value, object, and
+array counts as a node. The scanner never materializes a node beyond either
+budget. A transport or SDK integration that cannot enforce the byte, depth, and
+node-count boundaries below its general object decoder is not supported on an
+untrusted broker endpoint.
 
 An oversized inbound message invalidates the affected transport. CapScope may
 emit a bounded `broker_frame_limit_exceeded` response when the framing still
@@ -544,6 +559,7 @@ decoding, V1 applies the remaining tool-input limits before dispatch:
 | Input | Limit |
 | --- | ---: |
 | JSON nesting depth | 64 |
+| JSON syntax nodes | 131,072 |
 | `query` | 4,096 normalized UTF-8 bytes |
 | capability or operation ID | 128 bytes |
 | hierarchy `path` | 256 bytes |
@@ -554,12 +570,14 @@ decoding, V1 applies the remaining tool-input limits before dispatch:
 | `max_bytes` requested from `read` | 64 KiB decoded |
 | normalized `invoke.arguments` | 256 KiB encoded JSON |
 
-Invalid UTF-8, excess nesting, or an exceeded field, collection, or aggregate
-limit returns a typed bounded-request error before registry lookup, cache
-access, provider startup, or spill allocation. The outer 1 MiB limit remains
-authoritative even when individual fields are below their limits. Deployments
-may set smaller limits, but changing these V1-alpha maxima requires an explicit
-architecture and benchmark update.
+Invalid UTF-8 or syntax returns `broker_message_invalid`; excess nesting returns
+`broker_message_depth_exceeded`; and excess node count returns
+`broker_message_node_limit_exceeded`. An exceeded field, collection, or
+aggregate limit returns its typed bounded-request error. Each failure occurs
+before registry lookup, cache access, provider startup, or spill allocation.
+The outer 1 MiB limit remains authoritative even when individual fields are
+below their limits. Deployments may set smaller limits, but changing these
+V1-alpha maxima requires an explicit architecture and benchmark update.
 
 #### 6.5.3 Scoped provider resource links
 
@@ -705,9 +723,10 @@ idempotency and a replay token; capability packages do not imply either.
 
 Every message received from a downstream provider has a finite pre-decode
 limit, regardless of method or direction of the JSON-RPC exchange. V1 permits
-at most 16 MiB of encoded data and 128 levels of JSON object/array nesting per
-downstream protocol message. A depth-aware token scanner enforces both limits
-before the SDK constructs the general object graph. The limits apply to
+at most 16 MiB of encoded data, 128 levels of JSON object/array nesting, and
+1,048,576 JSON syntax nodes per downstream protocol message. Each object member
+name, scalar value, object, and array counts as a node. A token scanner enforces
+all three limits before the SDK constructs the general object graph. The limits apply to
 initialize and discovery responses, invocation results, errors, notifications,
 ping responses, progress events, and unsolicited requests or callbacks. The
 stricter metadata and result-ingestion quotas still apply after this transport
@@ -719,8 +738,9 @@ valid `Content-Length`; streaming transports enforce the limit independently
 for each event. The bound must sit below the SDK decoder. An SDK or transport
 that cannot expose a pre-decode boundary is unsupported for downstream V1 use.
 
-An exceeded byte limit returns `provider_frame_limit_exceeded`; an exceeded
-token-depth limit returns `provider_message_depth_exceeded`. Either failure
+An exceeded byte limit returns `provider_frame_limit_exceeded`; exceeded depth
+returns `provider_message_depth_exceeded`; exceeded node count returns
+`provider_message_node_limit_exceeded`. Any failure
 fails every affected in-flight request and closes the protocol connection.
 CapScope terminates a stdio child whose stream can no longer be trusted and
 closes an HTTP or event stream session; it does not skip bytes or attempt
@@ -1189,10 +1209,13 @@ Correctness:
 - provider authorization failures remain intact
 - structured results survive proxying
 - oversized structured results can be retrieved completely without silent truncation
-- request and provider-message nesting limits fire before general object construction
+- request and provider-message nesting and syntax-node limits fire before
+  general object construction
 - provider schemas cannot trigger external I/O or unbounded validation work
 - post-call preservation failures retain completed-call and original `isError` state
 - rewritten resource links remain readable for their promised post-result lifetime
+- every published cross-call handle resolves across replicas, or startup rejects
+  the unsupported replicated configuration
 - provider processes start and stop predictably
 
 Efficiency:
