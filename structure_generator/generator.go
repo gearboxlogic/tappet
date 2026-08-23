@@ -11,11 +11,40 @@ import (
 // GenerateStructure creates a two-layer folder structure from MCP server tools
 // Structure: structure/ (root) -> server_name/ (each server)
 func GenerateStructure(servers []ServerTools, outputDir string) error {
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	cleanOutputDir := filepath.Clean(outputDir)
+	if cleanOutputDir == "." || cleanOutputDir == string(filepath.Separator) {
+		return fmt.Errorf("output path must be a dedicated hierarchy directory: %s", cleanOutputDir)
+	}
+	parentDir := filepath.Dir(cleanOutputDir)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output parent directory: %w", err)
 	}
 
+	if info, err := os.Stat(cleanOutputDir); err == nil && !info.IsDir() {
+		return fmt.Errorf("output path is not a directory: %s", cleanOutputDir)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect output directory: %w", err)
+	}
+
+	stagingDir, err := os.MkdirTemp(parentDir, "."+filepath.Base(cleanOutputDir)+".tmp-")
+	if err != nil {
+		return fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDir)
+	if err := os.Chmod(stagingDir, 0755); err != nil {
+		return fmt.Errorf("failed to set staging directory permissions: %w", err)
+	}
+
+	if err := generateStructure(servers, stagingDir); err != nil {
+		return err
+	}
+	if err := replaceGeneratedDirectory(stagingDir, cleanOutputDir); err != nil {
+		return fmt.Errorf("failed to publish generated structure: %w", err)
+	}
+	return nil
+}
+
+func generateStructure(servers []ServerTools, outputDir string) error {
 	// Process each server (skip root.json generation)
 	for _, server := range servers {
 		if err := generateServerStructure(server, outputDir); err != nil {
@@ -28,6 +57,29 @@ func GenerateStructure(servers []ServerTools, outputDir string) error {
 		return fmt.Errorf("failed to generate root.json: %w", err)
 	}
 
+	return nil
+}
+
+func replaceGeneratedDirectory(stagingDir, outputDir string) error {
+	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+		return os.Rename(stagingDir, outputDir)
+	} else if err != nil {
+		return err
+	}
+
+	backupDir := stagingDir + ".previous"
+	if err := os.Rename(outputDir, backupDir); err != nil {
+		return err
+	}
+	if err := os.Rename(stagingDir, outputDir); err != nil {
+		if restoreErr := os.Rename(backupDir, outputDir); restoreErr != nil {
+			return fmt.Errorf("replace failed: %w; restoring previous output also failed: %v", err, restoreErr)
+		}
+		return err
+	}
+	if err := os.RemoveAll(backupDir); err != nil {
+		return fmt.Errorf("generated output is complete but previous output cleanup failed: %w", err)
+	}
 	return nil
 }
 

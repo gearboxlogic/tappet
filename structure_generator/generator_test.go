@@ -70,6 +70,40 @@ func TestRegeneratePreservesManualOverviewAndTracksMovedTools(t *testing.T) {
 	assert.Contains(t, group.Overview, "group: 1 tools")
 }
 
+func TestGenerateStructureReplacesStaleProvidersAndTools(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "hierarchy")
+	require.NoError(t, GenerateStructure([]ServerTools{
+		{ServerName: "alpha", Tools: []Tool{{Name: "current"}, {Name: "removed"}}},
+		{ServerName: "removed-provider", Tools: []Tool{{Name: "old"}}},
+	}, outputDir))
+
+	require.NoError(t, GenerateStructure([]ServerTools{
+		{ServerName: "alpha", Tools: []Tool{{Name: "current"}}},
+	}, outputDir))
+
+	_, err := os.Stat(filepath.Join(outputDir, "alpha", "removed.json"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(filepath.Join(outputDir, "removed-provider"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	root := readToolNode(t, filepath.Join(outputDir, "root.json"))
+	assert.Contains(t, root.Overview, "1 servers, 1 tools")
+}
+
+func TestGenerateStructureKeepsPreviousTreeWhenGenerationFails(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "hierarchy")
+	require.NoError(t, GenerateStructure([]ServerTools{
+		{ServerName: "alpha", Tools: []Tool{{Name: "stable"}}},
+	}, outputDir))
+
+	err := GenerateStructure([]ServerTools{
+		{ServerName: "alpha", Tools: []Tool{{Name: "missing/child"}}},
+	}, outputDir)
+	require.Error(t, err)
+
+	stable := readToolNode(t, filepath.Join(outputDir, "alpha", "stable.json"))
+	require.Contains(t, stable.Tools, "stable")
+}
+
 func TestGenerateStructureRejectsInvalidOutputPath(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(filePath, []byte("not a directory"), 0o644))

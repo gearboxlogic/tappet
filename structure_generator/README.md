@@ -1,6 +1,6 @@
 # CapScope structure generator
 
-`capscope-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a CapScope configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It applies configured provider environment variables and HTTP headers.
+`capscope-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a CapScope configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It expands environment placeholders in provider arguments and applies configured provider environment variables and HTTP headers.
 
 ```bash
 make build
@@ -9,7 +9,7 @@ make build
   --output testdata/mcp_hierarchy
 ```
 
-The generator performs the legacy MCP initialize handshake before listing tools and follows every `tools/list` cursor. Generation fails if any configured provider cannot return a complete inventory. It never reports success with a partial hierarchy. It writes:
+The generator performs the legacy MCP initialize handshake before listing tools and follows every `tools/list` cursor. Generation fails if any configured provider cannot return a complete inventory. It builds the hierarchy in a fresh staging directory and replaces the previous generated tree only after generation succeeds, so removed providers and tools do not remain as stale leaves. It never reports success with a partial hierarchy. It writes:
 
 ```text
 root.json

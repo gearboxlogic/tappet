@@ -181,6 +181,10 @@ func fetchFromConfigWithFactory(ctx context.Context, configPath string, factory 
 	// Fetch from each server
 	for _, serverName := range serverNames {
 		serverConfig := config.MCPServers[serverName]
+		if serverConfig == nil {
+			return nil, fmt.Errorf("invalid provider config for %s: configuration is null", serverName)
+		}
+		serverConfig = expandProviderConfig(serverConfig)
 		log.Printf("Connecting to MCP server: %s", serverName)
 
 		serverTools, err := fetchToolsFromServer(ctx, serverName, serverConfig, factory)
@@ -193,6 +197,15 @@ func fetchFromConfigWithFactory(ctx context.Context, configPath string, factory 
 	}
 
 	return allServers, nil
+}
+
+func expandProviderConfig(providerConfig *config.MCPClientConfigV2) *config.MCPClientConfigV2 {
+	expanded := *providerConfig
+	expanded.Args = make([]string, len(providerConfig.Args))
+	for i, arg := range providerConfig.Args {
+		expanded.Args[i] = os.ExpandEnv(arg)
+	}
+	return &expanded
 }
 
 // fetchToolsFromServer connects to an MCP server and fetches all tools

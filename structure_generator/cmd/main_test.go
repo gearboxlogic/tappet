@@ -19,11 +19,12 @@ import (
 )
 
 func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
+	t.Setenv("CAPSCOPE_GENERATOR_MODE", "serve")
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"stdio-provider": {
 			TransportType: config.MCPClientTypeStdio,
 			Command:       "fixture",
-			Args:          []string{"--serve"},
+			Args:          []string{"--${CAPSCOPE_GENERATOR_MODE}"},
 			Env:           map[string]string{"TOKEN": "fixture-token"},
 		},
 		"streamable-provider": {
@@ -70,6 +71,7 @@ func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
 	require.Len(t, servers, 2)
 	assert.Equal(t, []string{"stdio-provider", "streamable-provider"}, []string{servers[0].ServerName, servers[1].ServerName})
 	assert.Equal(t, "fixture-token", seen["stdio-provider"].Env["TOKEN"])
+	assert.Equal(t, []string{"--serve"}, seen["stdio-provider"].Args)
 	assert.Equal(t, "Bearer fixture", seen["streamable-provider"].Headers["Authorization"])
 	assert.Equal(t, 2, fixture.startCount())
 	assert.Equal(t, 2, fixture.initializeCount())
@@ -80,6 +82,22 @@ func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
 	assert.Equal(t, true, first.Annotations["readOnlyHint"])
 	require.Len(t, servers[0].Tools, 2)
 	assert.Equal(t, "second_tool", servers[0].Tools[1].Name)
+}
+
+func TestFetchFromConfigRejectsNullProviderConfig(t *testing.T) {
+	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
+		"broken": nil,
+	}})
+
+	factoryCalled := false
+	servers, err := fetchFromConfigWithFactory(context.Background(), configPath, func(string, *config.MCPClientConfigV2) (catalogConnection, error) {
+		factoryCalled = true
+		return catalogConnection{}, nil
+	})
+
+	assert.Nil(t, servers)
+	require.EqualError(t, err, "invalid provider config for broken: configuration is null")
+	assert.False(t, factoryCalled)
 }
 
 func TestFetchFromConfigRejectsPartialInventory(t *testing.T) {
