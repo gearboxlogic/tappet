@@ -124,6 +124,27 @@ Compact text used for discovery. It must state both what the capability does and
 
 Small deterministic search hints. Tags do not grant authority or activate behavior.
 
+### V1-alpha discovery metadata limits
+
+The package loader measures normalized UTF-8 bytes and enforces these hard
+limits before registering a capability:
+
+| Field | Limit |
+| --- | ---: |
+| capability ID | 128 bytes |
+| name | 128 bytes |
+| version | 64 bytes |
+| description | 1,024 bytes |
+| hierarchy path | 256 bytes |
+| tags | 16 entries |
+| one tag | 64 bytes |
+| all tags | 512 bytes |
+| complete normalized base card | 4,096 encoded JSON bytes |
+
+Invalid UTF-8 or any exceeded field, count, or aggregate limit rejects the
+package. CapScope does not truncate discovery metadata. These V1-alpha limits
+may change only through an explicit format revision and benchmark update.
+
 ## 5. Hierarchy
 
 `spec.parent` defines an optional parent capability path for browsing.
@@ -218,10 +239,21 @@ V1 rules:
 
 - local package-relative files only by default
 - no `..` traversal
+- no symlinks in manifest, skill, context, reference, script, or asset paths
 - no implicit recursive directory loading
 - bounded file size
 - text-first formats
 - stable digest in projections and traces
+
+### Package path containment
+
+CapScope resolves the configured package root to a canonical absolute path
+once, then cleans every package-relative path and checks each component with
+`lstat`. V1 rejects any symlink component or symlink target rather than
+following it. The final absolute path must remain beneath the canonical package
+root. Reads must use no-follow filesystem operations where available, or reopen
+and revalidate canonical containment, so a path cannot be swapped to an
+external target between validation and use.
 
 MCP resources may be added as a context source after the local-file vertical slice.
 
@@ -304,12 +336,14 @@ Reject packages with:
 - duplicate capability IDs
 - invalid version or identifier syntax
 - missing or escaping paths
+- symlinked package content or paths that fail canonical containment
 - invalid Agent Skills metadata
 - duplicate operation IDs
 - unknown provider references
 - duplicate provider aliases
 - provider targets absent from a refreshed metadata snapshot when strict validation is requested
 - unbounded or unsupported referenced files
+- discovery metadata that exceeds a per-field, count, or aggregate card limit
 
 Warnings may be appropriate when a provider is offline and strict target validation cannot run.
 
