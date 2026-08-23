@@ -305,6 +305,30 @@ Changing a source package requires an explicit reinstall that creates a new
 snapshot and manifest digest; in-place source writes cannot change an already
 published artifact reference.
 
+Install, reinstall, and uninstall update the durable installed-package registry
+as one atomic generation. A successful reinstall first commits and validates
+the new snapshot, then swaps the registry entry; the previous generation becomes
+unreachable to new `read` calls and its old artifact references return the typed
+stale-reference result. Uninstall removes the registry reference in the same
+way. A failed install never changes the active generation.
+
+Snapshot objects are reference-counted by active registry generations and by
+short-lived read leases. Resolving an artifact reference and acquiring its read
+lease is atomic, and the lease remains held until that `read` response has
+finished using the opened snapshot object. Garbage collection may delete a
+superseded or uninstalled snapshot only after both its registry count and active
+read lease count reach zero; it never evicts an object promised to an in-flight
+reader. Identical content-addressed objects shared by active snapshots remain
+live until the final reference is released.
+
+Reinstall and uninstall schedule collection, and quota admission runs collection
+before rejecting a new snapshot. Startup removes abandoned temporary writes and
+performs a mark-and-sweep from the durable installed registry, since in-memory
+lease counts do not survive a process exit. If live registry data still consumes
+the aggregate quota, installation fails explicitly with
+`snapshot_quota_exceeded`; garbage collection never deletes a live generation
+merely to make room.
+
 The snapshot store has finite per-artifact and aggregate quotas and is not
 writable through package paths. A platform or filesystem adapter that cannot
 provide the descriptor-relative race protection needed during ingestion is
