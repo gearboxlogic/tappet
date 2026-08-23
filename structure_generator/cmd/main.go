@@ -48,6 +48,29 @@ type catalogConnection struct {
 
 type catalogClientFactory func(string, *config.MCPClientConfigV2) (catalogConnection, error)
 
+const (
+	maxInventoryPages     = 128
+	maxInventoryTools     = 4_096
+	maxInventoryPageBytes = 4 << 20
+	maxInventoryBytes     = 32 << 20
+)
+
+type inventoryLimits struct {
+	pages      int
+	tools      int
+	pageBytes  int
+	totalBytes int
+}
+
+func defaultInventoryLimits() inventoryLimits {
+	return inventoryLimits{
+		pages:      maxInventoryPages,
+		tools:      maxInventoryTools,
+		pageBytes:  maxInventoryPageBytes,
+		totalBytes: maxInventoryBytes,
+	}
+}
+
 func main() {
 	var inputFiles arrayFlags
 	flag.Var(&inputFiles, "input", "Path to tool JSON file (can be specified multiple times)")
@@ -222,6 +245,10 @@ func expandProviderConfig(providerConfig *config.MCPClientConfigV2) *config.MCPC
 
 // fetchToolsFromServer connects to an MCP server and fetches all tools
 func fetchToolsFromServer(ctx context.Context, name string, providerConfig *config.MCPClientConfigV2, factory catalogClientFactory) (generator.ServerTools, error) {
+	return fetchToolsFromServerWithLimits(ctx, name, providerConfig, factory, defaultInventoryLimits())
+}
+
+func fetchToolsFromServerWithLimits(ctx context.Context, name string, providerConfig *config.MCPClientConfigV2, factory catalogClientFactory, limits inventoryLimits) (generator.ServerTools, error) {
 	connection, err := factory(name, providerConfig)
 	if err != nil {
 		return generator.ServerTools{}, fmt.Errorf("failed to create client: %w", err)
@@ -257,25 +284,61 @@ func fetchToolsFromServer(ctx context.Context, name string, providerConfig *conf
 	var allTools []generator.Tool
 	toolsRequest := mcp.ListToolsRequest{}
 	seenCursors := make(map[mcp.Cursor]struct{})
+	pageCount := 0
+	totalBytes := 2 // JSON array brackets.
 
 	log.Printf("[%s] Listing tools...", name)
 	for {
+		if pageCount >= limits.pages {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory page limit exceeded: maximum %d pages", limits.pages)
+		}
+		pageCount++
+
 		toolsResult, err := connection.client.ListToolsByPage(localCtx, toolsRequest)
 		if err != nil {
 			return generator.ServerTools{}, fmt.Errorf("failed to list tools: %w", err)
 		}
+		if len(toolsResult.Tools) > limits.tools-len(allTools) {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory tool limit exceeded: maximum %d tools", limits.tools)
+		}
+		if toolsResult.NextCursor != "" {
+			if _, seen := seenCursors[toolsResult.NextCursor]; seen {
+				return generator.ServerTools{}, fmt.Errorf("failed to list tools: repeated pagination cursor %q", toolsResult.NextCursor)
+			}
+		}
+
+		pageTools := make([]generator.Tool, 0, len(toolsResult.Tools))
+		pageBytes := 2 // JSON array brackets.
 		for _, mcpTool := range toolsResult.Tools {
 			tool, err := convertTool(mcpTool)
 			if err != nil {
 				return generator.ServerTools{}, fmt.Errorf("failed to preserve metadata for tool %s: %w", mcpTool.Name, err)
 			}
-			allTools = append(allTools, tool)
+			encodedTool, err := json.Marshal(tool)
+			if err != nil {
+				return generator.ServerTools{}, fmt.Errorf("failed to measure metadata for tool %s: %w", mcpTool.Name, err)
+			}
+			pageSeparator := 0
+			if len(pageTools) > 0 {
+				pageSeparator = 1
+			}
+			if exceedsInventoryLimit(pageBytes, len(encodedTool)+pageSeparator, limits.pageBytes) {
+				return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory page byte limit exceeded: maximum %d encoded bytes", limits.pageBytes)
+			}
+			totalSeparator := 0
+			if len(allTools)+len(pageTools) > 0 {
+				totalSeparator = 1
+			}
+			if exceedsInventoryLimit(totalBytes, len(encodedTool)+totalSeparator, limits.totalBytes) {
+				return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory byte limit exceeded: maximum %d encoded bytes", limits.totalBytes)
+			}
+			pageBytes += len(encodedTool) + pageSeparator
+			totalBytes += len(encodedTool) + totalSeparator
+			pageTools = append(pageTools, tool)
 		}
+		allTools = append(allTools, pageTools...)
 		if toolsResult.NextCursor == "" {
 			break
-		}
-		if _, seen := seenCursors[toolsResult.NextCursor]; seen {
-			return generator.ServerTools{}, fmt.Errorf("failed to list tools: repeated pagination cursor %q", toolsResult.NextCursor)
 		}
 		seenCursors[toolsResult.NextCursor] = struct{}{}
 		toolsRequest.Params.Cursor = toolsResult.NextCursor
@@ -285,6 +348,10 @@ func fetchToolsFromServer(ctx context.Context, name string, providerConfig *conf
 		ServerName: name,
 		Tools:      allTools,
 	}, nil
+}
+
+func exceedsInventoryLimit(current, additional, limit int) bool {
+	return current > limit || additional > limit-current
 }
 
 func newCatalogConnection(name string, providerConfig *config.MCPClientConfigV2) (catalogConnection, error) {

@@ -111,6 +111,82 @@ func TestFetchFromConfigRejectsRepeatedPaginationCursor(t *testing.T) {
 	assert.Equal(t, []string{"", "repeated"}, fixture.listRequests())
 }
 
+func TestFetchToolsFromServerEnforcesInventoryLimits(t *testing.T) {
+	tool := func(name, description string) mcp.Tool {
+		return mcp.Tool{
+			Name:        name,
+			Description: description,
+			InputSchema: mcp.ToolInputSchema{Type: "object", Properties: map[string]interface{}{}},
+		}
+	}
+	tests := []struct {
+		name         string
+		pages        map[string]*mcp.ListToolsResult
+		limits       inventoryLimits
+		wantError    string
+		wantRequests []string
+	}{
+		{
+			name: "pages",
+			pages: map[string]*mcp.ListToolsResult{
+				"":       {PaginatedResult: mcp.PaginatedResult{NextCursor: "page-2"}},
+				"page-2": {PaginatedResult: mcp.PaginatedResult{NextCursor: "page-3"}},
+				"page-3": {},
+			},
+			limits:       inventoryLimits{pages: 2, tools: 10, pageBytes: 1_024, totalBytes: 4_096},
+			wantError:    "inventory page limit exceeded: maximum 2 pages",
+			wantRequests: []string{"", "page-2"},
+		},
+		{
+			name: "tools",
+			pages: map[string]*mcp.ListToolsResult{
+				"": {Tools: []mcp.Tool{tool("one", ""), tool("two", "")}},
+			},
+			limits:       inventoryLimits{pages: 2, tools: 1, pageBytes: 1_024, totalBytes: 4_096},
+			wantError:    "inventory tool limit exceeded: maximum 1 tools",
+			wantRequests: []string{""},
+		},
+		{
+			name: "page bytes",
+			pages: map[string]*mcp.ListToolsResult{
+				"": {Tools: []mcp.Tool{tool("one", "metadata exceeds a deliberately tiny page limit")}},
+			},
+			limits:       inventoryLimits{pages: 2, tools: 10, pageBytes: 2, totalBytes: 4_096},
+			wantError:    "inventory page byte limit exceeded: maximum 2 encoded bytes",
+			wantRequests: []string{""},
+		},
+		{
+			name: "aggregate bytes",
+			pages: map[string]*mcp.ListToolsResult{
+				"": {Tools: []mcp.Tool{tool("one", "metadata exceeds a deliberately tiny aggregate limit")}},
+			},
+			limits:       inventoryLimits{pages: 2, tools: 10, pageBytes: 1_024, totalBytes: 2},
+			wantError:    "inventory byte limit exceeded: maximum 2 encoded bytes",
+			wantRequests: []string{""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := &fakeCatalogClient{pages: tt.pages, maxListCalls: len(tt.wantRequests)}
+			serverTools, err := fetchToolsFromServerWithLimits(
+				context.Background(),
+				"bounded-provider",
+				&config.MCPClientConfigV2{},
+				func(string, *config.MCPClientConfigV2) (catalogConnection, error) {
+					return catalogConnection{client: fixture}, nil
+				},
+				tt.limits,
+			)
+
+			assert.Empty(t, serverTools)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantError)
+			assert.Equal(t, tt.wantRequests, fixture.listRequests())
+		})
+	}
+}
+
 func TestFetchFromConfigRejectsNullProviderConfig(t *testing.T) {
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"broken": nil,
