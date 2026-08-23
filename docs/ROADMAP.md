@@ -42,6 +42,8 @@ Work:
 - advertise no unsupported provider-to-client callback capabilities
 - reject unsolicited multi-round-trip callbacks promptly and observably
 - enforce downstream byte, nesting, and syntax-node budgets before SDK decoding
+- bound provider-originated notification and callback queues, bytes, and handler
+  concurrency
 - run official MCP conformance suites in CI
 - add dual-era downstream fixtures
 
@@ -54,6 +56,8 @@ Exit criteria:
 - documented conformance results by protocol version and transport
 - no hidden capability state tied to protocol sessions
 - provider connections or invocations requiring unsupported callbacks fail within their applicable deadline
+- provider event floods close the affected connection without unbounded message
+  buffering or handler creation
 - modern and legacy provider fixtures pass
 
 ## Milestone 2: Capability package and registry
@@ -117,6 +121,8 @@ Exit criteria:
   within response bounds
 - a bounded continuation handle keeps an accepted multi-chunk artifact read
   available across a concurrent reinstall or uninstall
+- every continuation handle is unguessable and excluded from raw telemetry,
+  including after reinstall or uninstall
 - large capability structures remain completely retrievable across stable pages
 - deterministic results across runs
 
@@ -214,6 +220,8 @@ Measure:
 Exit criteria:
 
 - fixed initial surface independent of catalog size
+- global and per-method broker admission bounds reject or backpressure overload
+  before retaining unbounded request state
 - broker and downstream nesting and syntax-node limits are enforced during
   tokenization before general JSON object construction
 - irrelevant capabilities do not enter the transcript
