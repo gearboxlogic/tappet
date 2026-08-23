@@ -245,8 +245,21 @@ func TestFetchFromConfigPassesStdioEnvironment(t *testing.T) {
 
 func TestFetchFromConfigSupportsStreamableHTTPHeaders(t *testing.T) {
 	provider := mcpserver.NewMCPServer("streamable-fixture", "test")
+	remoteTool := mcp.NewToolWithRawSchema(
+		"remote_tool",
+		"remote fixture",
+		json.RawMessage(`{
+			"oneOf":[{"required":["query"]},{"required":["id"]}],
+			"properties":{"query":{"type":"string"},"id":{"type":"integer"}},
+			"additionalProperties":false
+		}`),
+	)
+	remoteTool.RawOutputSchema = json.RawMessage(`{
+		"type":"object",
+		"patternProperties":{"^item_":{"type":"string"}}
+	}`)
 	provider.AddTool(
-		mcp.NewTool("remote_tool", mcp.WithDescription("remote fixture")),
+		remoteTool,
 		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("ok"), nil
 		},
@@ -274,6 +287,9 @@ func TestFetchFromConfigSupportsStreamableHTTPHeaders(t *testing.T) {
 	require.Len(t, servers, 1)
 	require.Len(t, servers[0].Tools, 1)
 	assert.Equal(t, "remote_tool", servers[0].Tools[0].Name)
+	assert.Contains(t, servers[0].Tools[0].InputSchema, "oneOf")
+	assert.Equal(t, false, servers[0].Tools[0].InputSchema["additionalProperties"])
+	assert.Contains(t, servers[0].Tools[0].OutputSchema, "patternProperties")
 	require.Equal(t, "Bearer configured-token", <-headers)
 }
 
@@ -324,7 +340,7 @@ func (c *fakeCatalogClient) Initialize(context.Context, mcp.InitializeRequest) (
 	return &mcp.InitializeResult{}, nil
 }
 
-func (c *fakeCatalogClient) ListToolsByPage(_ context.Context, request mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+func (c *fakeCatalogClient) ListToolsByPage(_ context.Context, request mcp.ListToolsRequest) (*catalogToolsPage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cursor := string(request.Params.Cursor)
@@ -336,9 +352,15 @@ func (c *fakeCatalogClient) ListToolsByPage(_ context.Context, request mcp.ListT
 	if !ok {
 		return nil, errors.New("unexpected cursor")
 	}
-	copy := *result
-	copy.Tools = append([]mcp.Tool(nil), result.Tools...)
-	return &copy, nil
+	tools := make([]json.RawMessage, 0, len(result.Tools))
+	for _, tool := range result.Tools {
+		encoded, err := json.Marshal(tool)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, encoded)
+	}
+	return &catalogToolsPage{NextCursor: result.NextCursor, Tools: tools}, nil
 }
 
 func (*fakeCatalogClient) Close() error { return nil }

@@ -17,7 +17,7 @@ root.json
 <provider>/<tool>.json
 ```
 
-Each tool leaf keeps its input schema, optional output schema, annotations, downstream provider name, and `maps_to` name. `--regenerate` rebuilds branch overviews after files are moved without changing leaf definitions.
+Each tool leaf keeps its input schema, optional output schema, annotations, downstream provider name, and `maps_to` name. Live inventory reads each raw `tools/list` result before the pinned SDK converts it to typed tool structures, preserving valid schema keywords that `mcp-go v0.43.2` does not model. `--regenerate` rebuilds branch overviews after files are moved without changing leaf definitions.
 
 Package use:
 

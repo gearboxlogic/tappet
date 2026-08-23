@@ -9,11 +9,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/gearboxlogic/capscope/internal/client"
+	capscopeclient "github.com/gearboxlogic/capscope/internal/client"
 	"github.com/gearboxlogic/capscope/internal/config"
 	generator "github.com/gearboxlogic/capscope/structure_generator"
+	mcpclient "github.com/mark3labs/mcp-go/client"
+	mcptransport "github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -37,8 +40,52 @@ type Config struct {
 type catalogClient interface {
 	Start(context.Context) error
 	Initialize(context.Context, mcp.InitializeRequest) (*mcp.InitializeResult, error)
-	ListToolsByPage(context.Context, mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+	ListToolsByPage(context.Context, mcp.ListToolsRequest) (*catalogToolsPage, error)
 	Close() error
+}
+
+type catalogToolsPage struct {
+	NextCursor mcp.Cursor        `json:"nextCursor,omitempty"`
+	Tools      []json.RawMessage `json:"tools"`
+}
+
+type transportCatalogClient struct {
+	client    *mcpclient.Client
+	requestID atomic.Uint64
+}
+
+func (c *transportCatalogClient) Start(ctx context.Context) error {
+	return c.client.Start(ctx)
+}
+
+func (c *transportCatalogClient) Initialize(ctx context.Context, request mcp.InitializeRequest) (*mcp.InitializeResult, error) {
+	return c.client.Initialize(ctx, request)
+}
+
+func (c *transportCatalogClient) ListToolsByPage(ctx context.Context, request mcp.ListToolsRequest) (*catalogToolsPage, error) {
+	response, err := c.client.GetTransport().SendRequest(ctx, mcptransport.JSONRPCRequest{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		ID:      mcp.NewRequestId(fmt.Sprintf("capscope-inventory-%d", c.requestID.Add(1))),
+		Method:  "tools/list",
+		Params:  request.Params,
+		Header:  request.Header,
+	})
+	if err != nil {
+		return nil, mcptransport.NewError(err)
+	}
+	if response.Error != nil {
+		return nil, response.Error.AsError()
+	}
+
+	var result catalogToolsPage
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode lossless tools/list result: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *transportCatalogClient) Close() error {
+	return c.client.Close()
 }
 
 type catalogConnection struct {
@@ -309,14 +356,14 @@ func fetchToolsFromServerWithLimits(ctx context.Context, name string, providerCo
 
 		pageTools := make([]generator.Tool, 0, len(toolsResult.Tools))
 		pageBytes := 2 // JSON array brackets.
-		for _, mcpTool := range toolsResult.Tools {
-			tool, err := convertTool(mcpTool)
+		for toolIndex, rawTool := range toolsResult.Tools {
+			tool, err := convertTool(rawTool)
 			if err != nil {
-				return generator.ServerTools{}, fmt.Errorf("failed to preserve metadata for tool %s: %w", mcpTool.Name, err)
+				return generator.ServerTools{}, fmt.Errorf("failed to preserve metadata for tool at index %d: %w", toolIndex, err)
 			}
 			encodedTool, err := json.Marshal(tool)
 			if err != nil {
-				return generator.ServerTools{}, fmt.Errorf("failed to measure metadata for tool %s: %w", mcpTool.Name, err)
+				return generator.ServerTools{}, fmt.Errorf("failed to measure metadata for tool %s: %w", tool.Name, err)
 			}
 			pageSeparator := 0
 			if len(pageTools) > 0 {
@@ -355,12 +402,12 @@ func exceedsInventoryLimit(current, additional, limit int) bool {
 }
 
 func newCatalogConnection(name string, providerConfig *config.MCPClientConfigV2) (catalogConnection, error) {
-	mcpClient, err := client.NewMCPClientWithResponseLimit(name, providerConfig, maxInventoryPageBytes)
+	mcpClient, err := capscopeclient.NewMCPClientWithResponseLimit(name, providerConfig, maxInventoryPageBytes)
 	if err != nil {
 		return catalogConnection{}, err
 	}
 	return catalogConnection{
-		client:    mcpClient.GetClient(),
+		client:    &transportCatalogClient{client: mcpClient.GetClient()},
 		needStart: mcpClient.NeedManualStart(),
 	}, nil
 }
@@ -373,11 +420,7 @@ func closeCatalogClientAsync(name string, catalog catalogClient) {
 	}()
 }
 
-func convertTool(tool mcp.Tool) (generator.Tool, error) {
-	data, err := json.Marshal(tool)
-	if err != nil {
-		return generator.Tool{}, err
-	}
+func convertTool(data json.RawMessage) (generator.Tool, error) {
 	var fields struct {
 		Name         string                 `json:"name"`
 		Description  string                 `json:"description"`
