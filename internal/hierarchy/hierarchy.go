@@ -433,7 +433,9 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	// Stdio is a single-channel transport that cannot handle interleaved messages.
 	// This protects mcp-go v0.43.2 stdio writes, which are not framed by a transport write mutex.
 	mutex := registry.GetClientMutex(serverName)
-	mutex.Lock()
+	if err := mutex.LockContext(toolCtx); err != nil {
+		return nil, fmt.Errorf("failed to wait for provider %s: %w", serverName, err)
+	}
 	defer mutex.Unlock()
 
 	// Call the tool on the actual MCP server
@@ -471,7 +473,7 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 // ServerRegistry manages MCP client connections
 type ServerRegistry struct {
 	clients       map[string]ProviderClient
-	clientMutex   map[string]*sync.Mutex // Per-client mutex for serializing tool calls
+	clientMutex   map[string]*ClientMutex // Per-client mutex for serializing tool calls
 	serverConfigs map[string]*config.MCPClientConfigV2
 	clientFactory ProviderClientFactory
 	lifecycleCtx  context.Context
@@ -501,7 +503,7 @@ func newServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2, facto
 	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &ServerRegistry{
 		clients:       make(map[string]ProviderClient),
-		clientMutex:   make(map[string]*sync.Mutex),
+		clientMutex:   make(map[string]*ClientMutex),
 		serverConfigs: serverConfigs,
 		clientFactory: factory,
 		lifecycleCtx:  lifecycleCtx,
@@ -513,7 +515,7 @@ func newServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2, facto
 // This mutex serializes tool calls to prevent concurrent stdio access.
 // Note: This map grows with the number of unique servers accessed. Since the set of
 // servers is bounded by the configuration/hierarchy, this is not a memory leak.
-func (r *ServerRegistry) GetClientMutex(serverName string) *sync.Mutex {
+func (r *ServerRegistry) GetClientMutex(serverName string) *ClientMutex {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -521,9 +523,38 @@ func (r *ServerRegistry) GetClientMutex(serverName string) *sync.Mutex {
 		return m
 	}
 
-	m := &sync.Mutex{}
+	m := NewClientMutex()
 	r.clientMutex[serverName] = m
 	return m
+}
+
+// ClientMutex serializes calls while allowing a queued call to stop waiting
+// when its invocation context expires.
+type ClientMutex struct {
+	token chan struct{}
+}
+
+func NewClientMutex() *ClientMutex {
+	mutex := &ClientMutex{token: make(chan struct{}, 1)}
+	mutex.token <- struct{}{}
+	return mutex
+}
+
+func (m *ClientMutex) Lock() {
+	<-m.token
+}
+
+func (m *ClientMutex) LockContext(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.token:
+		return nil
+	}
+}
+
+func (m *ClientMutex) Unlock() {
+	m.token <- struct{}{}
 }
 
 // GetOrLoadServer gets an existing client or creates and initializes a new one
@@ -569,11 +600,23 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
+	var startCtx *providerStartContext
 	if mcpClient.NeedManualStart() {
-		if err := mcpClient.GetClient().Start(lifecycleCtx); err != nil {
+		startCtx = newProviderStartContext(ctx, lifecycleCtx)
+		if err := mcpClient.GetClient().Start(startCtx); err != nil {
+			startCtx.abort()
 			closeFailedProviderAsync(serverName, mcpClient)
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("failed to start MCP client: %w", ctx.Err())
+			}
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
+		if ctx.Err() != nil {
+			startCtx.abort()
+			closeFailedProviderAsync(serverName, mcpClient)
+			return nil, fmt.Errorf("failed to start MCP client: %w", ctx.Err())
+		}
+		startCtx.detach()
 	}
 
 	initRequest := mcp.InitializeRequest{}
@@ -582,6 +625,9 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
 	if _, err := mcpClient.GetClient().Initialize(ctx, initRequest); err != nil {
+		if startCtx != nil {
+			startCtx.abort()
+		}
 		closeFailedProviderAsync(serverName, mcpClient)
 		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
@@ -591,6 +637,96 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		go mcpClient.StartPingTask(lifecycleCtx)
 	}
 	return mcpClient, nil
+}
+
+// providerStartContext observes the invocation deadline until Start succeeds.
+// After detach, the stable Done channel follows only the registry lifecycle,
+// so an established SSE stream outlives the request that started it.
+type providerStartContext struct {
+	startup       context.Context
+	lifecycle     context.Context
+	done          chan struct{}
+	mu            sync.Mutex
+	err           error
+	detached      bool
+	stopStartup   func() bool
+	stopLifecycle func() bool
+}
+
+func newProviderStartContext(startup, lifecycle context.Context) *providerStartContext {
+	ctx := &providerStartContext{
+		startup:   startup,
+		lifecycle: lifecycle,
+		done:      make(chan struct{}),
+	}
+	ctx.stopStartup = context.AfterFunc(startup, func() {
+		ctx.cancelStartup(startup.Err())
+	})
+	ctx.stopLifecycle = context.AfterFunc(lifecycle, func() {
+		ctx.cancel(lifecycle.Err())
+	})
+	return ctx
+}
+
+func (c *providerStartContext) Deadline() (time.Time, bool) {
+	c.mu.Lock()
+	detached := c.detached
+	c.mu.Unlock()
+	if detached {
+		return c.lifecycle.Deadline()
+	}
+	return c.startup.Deadline()
+}
+
+func (c *providerStartContext) Done() <-chan struct{} { return c.done }
+
+func (c *providerStartContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *providerStartContext) Value(key any) any {
+	c.mu.Lock()
+	detached := c.detached
+	c.mu.Unlock()
+	if detached {
+		return c.lifecycle.Value(key)
+	}
+	return c.startup.Value(key)
+}
+
+func (c *providerStartContext) detach() {
+	c.mu.Lock()
+	c.detached = true
+	c.mu.Unlock()
+	c.stopStartup()
+}
+
+func (c *providerStartContext) abort() {
+	c.stopStartup()
+	c.stopLifecycle()
+	c.cancel(context.Canceled)
+}
+
+func (c *providerStartContext) cancelStartup(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.detached || c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
+}
+
+func (c *providerStartContext) cancel(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
 }
 
 // closeFailedProviderAsync keeps mcp-go stdio cleanup from hiding the start or
@@ -617,5 +753,5 @@ func (r *ServerRegistry) Close() {
 
 	// Clear the clients and mutex maps
 	r.clients = make(map[string]ProviderClient)
-	r.clientMutex = make(map[string]*sync.Mutex)
+	r.clientMutex = make(map[string]*ClientMutex)
 }

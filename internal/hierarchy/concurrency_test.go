@@ -42,7 +42,7 @@ func TestGetClientMutex_ConcurrentAccess(t *testing.T) {
 
 	const numGoroutines = 100
 	var wg sync.WaitGroup
-	mutexes := make([]*sync.Mutex, numGoroutines)
+	mutexes := make([]*ClientMutex, numGoroutines)
 
 	// All goroutines request the same server's mutex concurrently
 	for i := 0; i < numGoroutines; i++ {
@@ -129,7 +129,7 @@ func TestDifferentServersMutexesAllowParallel(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Simulate parallel execution on different servers
-	simulateWork := func(mutex *sync.Mutex, serverName string) {
+	simulateWork := func(mutex *ClientMutex, serverName string) {
 		defer wg.Done()
 
 		mutex.Lock()

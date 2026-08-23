@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -124,6 +126,51 @@ func TestInvocationDeadlineIncludesProviderAcquisition(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get MCP client")
 }
 
+func TestInvocationDeadlineStopsPendingSSEProviderStartup(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestClosed := make(chan struct{})
+	var startedOnce sync.Once
+	var closedOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedOnce.Do(func() { close(requestStarted) })
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+		closedOnce.Do(func() { close(requestClosed) })
+	}))
+	t.Cleanup(provider.Close)
+
+	configs := characterizationConfigs()
+	configs["provider-a"] = &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeSSE,
+		URL:           provider.URL + "/sse",
+	}
+	registry := NewServerRegistry(configs)
+	defer registry.Close()
+	h := loadCharacterizationHierarchy(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := h.HandleExecuteTool(ctx, registry, "alpha.nested.public_tool", nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "failed to get MCP client")
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SSE provider did not receive the startup request")
+	}
+	select {
+	case <-requestClosed:
+	case <-time.After(time.Second):
+		t.Fatal("SSE startup request remained open after the invocation deadline")
+	}
+}
+
 func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
 	closeStarted := make(chan struct{})
 	releaseClose := make(chan struct{})
@@ -222,7 +269,7 @@ func TestDifferentProviderCallsRunConcurrently(t *testing.T) {
 	registry.Close()
 }
 
-func TestCanceledCallWaitsForSameProviderLockThenPreservesClassification(t *testing.T) {
+func TestCanceledCallStopsWaitingForSameProviderLock(t *testing.T) {
 	h := loadCharacterizationHierarchy(t)
 	provider := ProviderClientFunc(func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return nil, ctx.Err()
@@ -241,17 +288,15 @@ func TestCanceledCallWaitsForSameProviderLockThenPreservesClassification(t *test
 		errCh <- err
 	}()
 
-	<-ctx.Done()
 	select {
 	case err := <-errCh:
-		t.Fatalf("call returned before the inherited mutex was released: %v", err)
-	default:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Contains(t, err.Error(), "failed to wait for provider provider-a")
+	case <-time.After(time.Second):
+		t.Fatal("call remained blocked on the provider lock after its deadline")
 	}
 	lock.Unlock()
-	err := <-errCh
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Contains(t, err.Error(), "failed to call tool actual_tool")
 }
 
 func TestDownstreamErrorsAndStructuredResultsArePreserved(t *testing.T) {

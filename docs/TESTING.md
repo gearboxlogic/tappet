@@ -27,9 +27,9 @@ At `mcp-go v0.43.2`, `client/transport/stdio.go` protects the response map but c
 
 - one provider receives one call at a time;
 - different providers can run concurrently;
-- a canceled waiter remains blocked until the plain mutex is released, then returns an error that preserves `context.DeadlineExceeded`.
+- a queued call stops waiting when its context is canceled or reaches its deadline, without invoking the provider, and the returned error preserves the context classification.
 
-Milestone 1 should recheck this rule against the selected SDK version and transport implementations. It should replace the plain mutex with context-aware admission only as a separately tested behavior change.
+Milestone 1 should recheck the serialization rule against the selected SDK version and transport implementations. Context-aware admission is retained while serialization remains necessary.
 
 ## Failed provider initialization
 
