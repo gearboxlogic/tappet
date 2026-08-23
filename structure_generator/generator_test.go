@@ -252,6 +252,22 @@ func TestGenerateStructureRejectsCaseFoldingNameCollisions(t *testing.T) {
 			errorSubstr: "reserved for the hierarchy root",
 		},
 		{
+			name: "reserved root tool name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "root"}},
+			}},
+			errorSubstr: "tool name is reserved for the hierarchy root",
+		},
+		{
+			name: "case-folded reserved root tool name",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "ROOT"}},
+			}},
+			errorSubstr: "tool name is reserved for the hierarchy root",
+		},
+		{
 			name: "tool names",
 			servers: []ServerTools{{
 				ServerName: "alpha",

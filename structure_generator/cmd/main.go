@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -48,6 +49,27 @@ type catalogClient interface {
 type catalogToolsPage struct {
 	NextCursor mcp.Cursor        `json:"nextCursor,omitempty"`
 	Tools      []json.RawMessage `json:"tools"`
+}
+
+func (p *catalogToolsPage) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		NextCursor mcp.Cursor      `json:"nextCursor,omitempty"`
+		Tools      json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	encodedTools := bytes.TrimSpace(wire.Tools)
+	if len(encodedTools) == 0 || bytes.Equal(encodedTools, []byte("null")) {
+		return errors.New(`tools/list result is missing required "tools" array`)
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(encodedTools, &tools); err != nil {
+		return fmt.Errorf(`tools/list result field "tools" must be an array: %w`, err)
+	}
+	p.NextCursor = wire.NextCursor
+	p.Tools = tools
+	return nil
 }
 
 type transportCatalogClient struct {
@@ -345,6 +367,9 @@ func fetchToolsFromServerWithLimits(ctx context.Context, name string, providerCo
 		toolsResult, err := connection.client.ListToolsByPage(localCtx, toolsRequest)
 		if err != nil {
 			return generator.ServerTools{}, fmt.Errorf("failed to list tools: %w", err)
+		}
+		if toolsResult == nil {
+			return generator.ServerTools{}, errors.New("failed to list tools: provider returned no tools/list result")
 		}
 		if len(toolsResult.Tools) > limits.tools-len(allTools) {
 			return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory tool limit exceeded: maximum %d tools", limits.tools)

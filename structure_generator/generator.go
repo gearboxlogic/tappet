@@ -155,6 +155,9 @@ func validateGeneratedNames(servers []ServerTools) error {
 				return fmt.Errorf("provider %s: %w", server.ServerName, err)
 			}
 			toolNameKey := foldGeneratedName(tool.Name)
+			if toolNameKey == rootNameKey {
+				return fmt.Errorf("provider %s: tool name is reserved for the hierarchy root: %s", server.ServerName, tool.Name)
+			}
 			if tool.Name == server.ServerName {
 				return fmt.Errorf("provider %s: tool name collides with provider index: %s", server.ServerName, tool.Name)
 			}

@@ -331,6 +331,32 @@ func TestConvertToolRejectsMissingInputSchema(t *testing.T) {
 	}
 }
 
+func TestCatalogToolsPageRequiresToolsArray(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		result string
+	}{
+		{name: "missing", result: `{}`},
+		{name: "null", result: `{"tools":null}`},
+		{name: "wrong type", result: `{"tools":{}}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var page catalogToolsPage
+			err := json.Unmarshal([]byte(testCase.result), &page)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `tools/list result`)
+		})
+	}
+}
+
+func TestCatalogToolsPageAcceptsEmptyToolsArray(t *testing.T) {
+	var page catalogToolsPage
+	require.NoError(t, json.Unmarshal([]byte(`{"tools":[],"nextCursor":"next"}`), &page))
+	require.NotNil(t, page.Tools)
+	assert.Empty(t, page.Tools)
+	assert.Equal(t, mcp.Cursor("next"), page.NextCursor)
+}
+
 func TestGeneratorStdioProvider(t *testing.T) {
 	if os.Getenv("TAPPET_GENERATOR_FIXTURE") != "enabled" {
 		return
