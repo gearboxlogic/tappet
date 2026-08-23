@@ -256,6 +256,7 @@ func fetchToolsFromServer(ctx context.Context, name string, providerConfig *conf
 	// Fetch all tools
 	var allTools []generator.Tool
 	toolsRequest := mcp.ListToolsRequest{}
+	seenCursors := make(map[mcp.Cursor]struct{})
 
 	log.Printf("[%s] Listing tools...", name)
 	for {
@@ -273,6 +274,10 @@ func fetchToolsFromServer(ctx context.Context, name string, providerConfig *conf
 		if toolsResult.NextCursor == "" {
 			break
 		}
+		if _, seen := seenCursors[toolsResult.NextCursor]; seen {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: repeated pagination cursor %q", toolsResult.NextCursor)
+		}
+		seenCursors[toolsResult.NextCursor] = struct{}{}
 		toolsRequest.Params.Cursor = toolsResult.NextCursor
 	}
 

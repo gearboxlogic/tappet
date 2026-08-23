@@ -89,6 +89,28 @@ func TestFetchFromConfigPreservesCompletePagedToolMetadata(t *testing.T) {
 	assert.Equal(t, "second_tool", servers[0].Tools[1].Name)
 }
 
+func TestFetchFromConfigRejectsRepeatedPaginationCursor(t *testing.T) {
+	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
+		"cyclic-provider": {TransportType: config.MCPClientTypeStdio, Command: "fixture"},
+	}})
+	fixture := &fakeCatalogClient{
+		pages: map[string]*mcp.ListToolsResult{
+			"":         {PaginatedResult: mcp.PaginatedResult{NextCursor: "repeated"}},
+			"repeated": {PaginatedResult: mcp.PaginatedResult{NextCursor: "repeated"}},
+		},
+		maxListCalls: 2,
+	}
+
+	servers, err := fetchFromConfigWithFactory(context.Background(), configPath, func(string, *config.MCPClientConfigV2) (catalogConnection, error) {
+		return catalogConnection{client: fixture}, nil
+	})
+
+	assert.Nil(t, servers)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `failed to list tools: repeated pagination cursor "repeated"`)
+	assert.Equal(t, []string{"", "repeated"}, fixture.listRequests())
+}
+
 func TestFetchFromConfigRejectsNullProviderConfig(t *testing.T) {
 	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
 		"broken": nil,
@@ -204,10 +226,12 @@ func writeGeneratorConfig(t *testing.T, cfg Config) string {
 }
 
 type fakeCatalogClient struct {
-	mu          sync.Mutex
-	pages       map[string]*mcp.ListToolsResult
-	starts      int
-	initializes int
+	mu           sync.Mutex
+	pages        map[string]*mcp.ListToolsResult
+	starts       int
+	initializes  int
+	requests     []string
+	maxListCalls int
 }
 
 func (c *fakeCatalogClient) Start(context.Context) error {
@@ -227,7 +251,12 @@ func (c *fakeCatalogClient) Initialize(context.Context, mcp.InitializeRequest) (
 func (c *fakeCatalogClient) ListToolsByPage(_ context.Context, request mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	result, ok := c.pages[string(request.Params.Cursor)]
+	cursor := string(request.Params.Cursor)
+	c.requests = append(c.requests, cursor)
+	if c.maxListCalls > 0 && len(c.requests) > c.maxListCalls {
+		return nil, errors.New("too many list requests")
+	}
+	result, ok := c.pages[cursor]
 	if !ok {
 		return nil, errors.New("unexpected cursor")
 	}
@@ -248,4 +277,10 @@ func (c *fakeCatalogClient) initializeCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.initializes
+}
+
+func (c *fakeCatalogClient) listRequests() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.requests...)
 }
