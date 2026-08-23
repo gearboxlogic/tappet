@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -423,15 +424,21 @@ func closeCatalogClientAsync(name string, catalog catalogClient) {
 func convertTool(data json.RawMessage) (generator.Tool, error) {
 	var fields struct {
 		Name         string                 `json:"name"`
+		Title        string                 `json:"title"`
 		Description  string                 `json:"description"`
 		InputSchema  map[string]interface{} `json:"inputSchema"`
 		OutputSchema map[string]interface{} `json:"outputSchema"`
 		Annotations  map[string]interface{} `json:"annotations"`
 	}
-	if err := json.Unmarshal(data, &fields); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&fields); err != nil {
 		return generator.Tool{}, err
 	}
-	title, _ := fields.Annotations["title"].(string)
+	title := fields.Title
+	if title == "" {
+		title, _ = fields.Annotations["title"].(string)
+	}
 	return generator.Tool{
 		Name:         fields.Name,
 		Title:        title,

@@ -293,6 +293,28 @@ func TestFetchFromConfigSupportsStreamableHTTPHeaders(t *testing.T) {
 	require.Equal(t, "Bearer configured-token", <-headers)
 }
 
+func TestConvertToolPreservesSchemaNumbersAndTopLevelTitle(t *testing.T) {
+	tool, err := convertTool(json.RawMessage(`{
+		"name":"precise_tool",
+		"title":"Top-level title",
+		"inputSchema":{"type":"integer","maximum":9007199254740993},
+		"outputSchema":{"type":"integer","minimum":-9007199254740993},
+		"annotations":{"title":"Annotation title","readOnlyHint":true}
+	}`))
+	require.NoError(t, err)
+
+	assert.Equal(t, "Top-level title", tool.Title)
+	assert.Equal(t, json.Number("9007199254740993"), tool.InputSchema["maximum"])
+	assert.Equal(t, json.Number("-9007199254740993"), tool.OutputSchema["minimum"])
+	assert.Equal(t, "Annotation title", tool.Annotations["title"])
+	assert.Equal(t, true, tool.Annotations["readOnlyHint"])
+
+	encoded, err := json.Marshal(tool)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"maximum":9007199254740993`)
+	assert.Contains(t, string(encoded), `"minimum":-9007199254740993`)
+}
+
 func TestGeneratorStdioProvider(t *testing.T) {
 	if os.Getenv("CAPSCOPE_GENERATOR_FIXTURE") != "enabled" {
 		return
