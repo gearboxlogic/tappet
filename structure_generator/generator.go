@@ -2,6 +2,7 @@ package structure_generator
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,9 @@ import (
 func GenerateStructure(servers []ServerTools, outputDir string) error {
 	cleanOutputDir := filepath.Clean(outputDir)
 	if err := validateOutputLocation(cleanOutputDir); err != nil {
+		return err
+	}
+	if err := validateGeneratedNames(servers); err != nil {
 		return err
 	}
 	parentDir := filepath.Dir(cleanOutputDir)
@@ -71,10 +75,21 @@ func validateOutputLocation(outputDir string) error {
 }
 
 func validateExistingHierarchyDirectory(outputDir string) error {
-	entries, err := os.ReadDir(outputDir)
+	info, err := os.Lstat(outputDir)
 	if os.IsNotExist(err) {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("failed to inspect output path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace symlinked output directory: %s", outputDir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to replace non-directory output path: %s", outputDir)
+	}
+
+	entries, err := os.ReadDir(outputDir)
 	if err != nil {
 		return fmt.Errorf("failed to inspect output directory: %w", err)
 	}
@@ -109,6 +124,62 @@ func validateExistingHierarchyDirectory(outputDir string) error {
 	return nil
 }
 
+func validateGeneratedNames(servers []ServerTools) error {
+	serverNames := make(map[string]struct{}, len(servers))
+	for _, server := range servers {
+		if err := validateGeneratedComponent("provider", server.ServerName); err != nil {
+			return err
+		}
+		if server.ServerName == "root.json" {
+			return errors.New("provider name is reserved for the hierarchy root: root.json")
+		}
+		if _, exists := serverNames[server.ServerName]; exists {
+			return fmt.Errorf("duplicate provider name: %s", server.ServerName)
+		}
+		serverNames[server.ServerName] = struct{}{}
+
+		toolNames := make(map[string]struct{}, len(server.Tools))
+		for _, tool := range server.Tools {
+			if err := validateGeneratedComponent("tool", tool.Name); err != nil {
+				return fmt.Errorf("provider %s: %w", server.ServerName, err)
+			}
+			if tool.Name == server.ServerName {
+				return fmt.Errorf("provider %s: tool name collides with provider index: %s", server.ServerName, tool.Name)
+			}
+			if _, exists := toolNames[tool.Name]; exists {
+				return fmt.Errorf("provider %s: duplicate tool name: %s", server.ServerName, tool.Name)
+			}
+			toolNames[tool.Name] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validateGeneratedComponent(kind, name string) error {
+	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) ||
+		filepath.VolumeName(name) != "" || strings.ContainsAny(name, `/\\`) || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("invalid %s name for generated path: %q", kind, name)
+	}
+	return nil
+}
+
+func generatedPath(root string, components ...string) (string, error) {
+	rootPath, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve generation root: %w", err)
+	}
+	parts := append([]string{rootPath}, components...)
+	candidate := filepath.Join(parts...)
+	relative, err := filepath.Rel(rootPath, candidate)
+	if err != nil {
+		return "", fmt.Errorf("failed to verify generated path: %w", err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("generated path escapes staging directory: %s", candidate)
+	}
+	return candidate, nil
+}
+
 func generateStructure(servers []ServerTools, outputDir string) error {
 	// Process each server (skip root.json generation)
 	for _, server := range servers {
@@ -126,10 +197,14 @@ func generateStructure(servers []ServerTools, outputDir string) error {
 }
 
 func replaceGeneratedDirectory(stagingDir, outputDir string) error {
-	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+	info, err := os.Lstat(outputDir)
+	if os.IsNotExist(err) {
 		return os.Rename(stagingDir, outputDir)
 	} else if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace symlinked output directory: %s", outputDir)
 	}
 
 	backupDir := stagingDir + ".previous"
@@ -494,7 +569,10 @@ func extractBriefDescription(text string) string {
 // New structure: server_name/server_name.json (parent) + server_name/tool_name/tool_name.json (children)
 func generateServerStructure(server ServerTools, outputDir string) error {
 	// Create server directory: structure/server_name/
-	serverDir := filepath.Join(outputDir, server.ServerName)
+	serverDir, err := generatedPath(outputDir, server.ServerName)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(serverDir, 0755); err != nil {
 		return fmt.Errorf("failed to create server directory: %w", err)
 	}
@@ -503,7 +581,7 @@ func generateServerStructure(server ServerTools, outputDir string) error {
 	var childSummaries []string
 	for _, tool := range server.Tools {
 		// Generate tool file (leaf node) in flat structure
-		if err := generateToolFile(tool, serverDir, server.ServerName); err != nil {
+		if err := generateToolFile(tool, outputDir, server.ServerName); err != nil {
 			return fmt.Errorf("failed to generate tool file for %s: %w", tool.Name, err)
 		}
 
@@ -534,16 +612,22 @@ func generateServerStructure(server ServerTools, outputDir string) error {
 	}
 
 	// Write server JSON file: structure/server_name/server_name.json
-	jsonPath := filepath.Join(serverDir, server.ServerName+".json")
+	jsonPath, err := generatedPath(outputDir, server.ServerName, server.ServerName+".json")
+	if err != nil {
+		return err
+	}
 	return writeNodeToJSON(serverNode, jsonPath)
 }
 
 // generateToolFile creates a JSON file for a single tool in flat structure
 // Structure: parent_dir/tool_name.json
 // This creates a leaf node (has tools, no overview)
-func generateToolFile(tool Tool, parentDir string, serverName string) error {
+func generateToolFile(tool Tool, outputDir string, serverName string) error {
 	// Flat structure: place tool.json directly in parent directory
-	jsonPath := filepath.Join(parentDir, tool.Name+".json")
+	jsonPath, err := generatedPath(outputDir, serverName, tool.Name+".json")
+	if err != nil {
+		return err
+	}
 
 	// Create ToolNode for this tool (leaf node - no overview, only tools)
 	toolNode := ToolNode{

@@ -89,41 +89,43 @@ func (b *sseEventLimitedBody) Read(buffer []byte) (int, error) {
 
 func (b *sseEventLimitedBody) readEvent() ([]byte, error) {
 	event := make([]byte, 0, min(int64(4_096), b.maxBytes))
+	atLineStart := true
 	for {
-		fragment, err := b.reader.ReadSlice('\n')
-		if int64(len(event))+int64(len(fragment)) > b.maxBytes {
+		character, err := b.reader.ReadByte()
+		if err != nil {
+			return event, err
+		}
+		if int64(len(event)) == b.maxBytes {
 			_ = b.body.Close()
 			return nil, fmt.Errorf("%w: SSE event exceeds %d bytes", ErrResponseLimitExceeded, b.maxBytes)
 		}
-		event = append(event, fragment...)
+		event = append(event, character)
 
-		if err == nil {
-			if isSSEBlankLine(fragment) {
-				return event, nil
+		if character != '\r' && character != '\n' {
+			atLineStart = false
+			continue
+		}
+
+		if character == '\r' {
+			if next, peekErr := b.reader.Peek(1); peekErr == nil && next[0] == '\n' {
+				if int64(len(event)) == b.maxBytes {
+					_ = b.body.Close()
+					return nil, fmt.Errorf("%w: SSE event exceeds %d bytes", ErrResponseLimitExceeded, b.maxBytes)
+				}
+				_, _ = b.reader.ReadByte()
+				event = append(event, '\n')
 			}
-			continue
 		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
+
+		if atLineStart {
+			return event, nil
 		}
-		return event, err
+		atLineStart = true
 	}
 }
 
 func (b *sseEventLimitedBody) Close() error {
 	return b.body.Close()
-}
-
-func isSSEBlankLine(line []byte) bool {
-	if len(line) == 0 {
-		return false
-	}
-	for _, character := range line {
-		if character != '\r' && character != '\n' {
-			return false
-		}
-	}
-	return true
 }
 
 type responseLimitedBody struct {
@@ -241,6 +243,9 @@ type limitedStdioTransport struct {
 	commandIO *exec.Cmd
 	limitCh   chan struct{}
 	limitOnce sync.Once
+
+	notificationHandler func(mcp.JSONRPCNotification)
+	requestHandler      transport.RequestHandler
 }
 
 func newLimitedStdioTransport(command string, env, args []string, maxBytes int64) *limitedStdioTransport {
@@ -284,6 +289,7 @@ func (t *limitedStdioTransport) Start(ctx context.Context) error {
 	t.commandIO = commandIO
 	limitedStdout := newBoundedLineReader(stdout, t.maxBytes, t.signalLimit)
 	t.inner = transport.NewIO(limitedStdout, stdin, stderr)
+	installInboundHandlers(t.inner, t.notificationHandler, t.requestHandler)
 	if err := t.inner.Start(ctx); err != nil {
 		_ = commandIO.Process.Kill()
 		_ = commandIO.Wait()
@@ -356,17 +362,39 @@ func (t *limitedStdioTransport) SendNotification(ctx context.Context, notificati
 
 func (t *limitedStdioTransport) SetNotificationHandler(handler func(mcp.JSONRPCNotification)) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.inner != nil {
-		t.inner.SetNotificationHandler(handler)
+	t.notificationHandler = handler
+	inner := t.inner
+	t.mu.Unlock()
+	if inner != nil {
+		inner.SetNotificationHandler(handler)
 	}
 }
 
 func (t *limitedStdioTransport) SetRequestHandler(handler transport.RequestHandler) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.inner != nil {
-		t.inner.SetRequestHandler(handler)
+	t.requestHandler = handler
+	inner := t.inner
+	t.mu.Unlock()
+	if inner != nil {
+		inner.SetRequestHandler(handler)
+	}
+}
+
+type inboundHandlerSetter interface {
+	SetNotificationHandler(func(mcp.JSONRPCNotification))
+	SetRequestHandler(transport.RequestHandler)
+}
+
+func installInboundHandlers(
+	target inboundHandlerSetter,
+	notificationHandler func(mcp.JSONRPCNotification),
+	requestHandler transport.RequestHandler,
+) {
+	if notificationHandler != nil {
+		target.SetNotificationHandler(notificationHandler)
+	}
+	if requestHandler != nil {
+		target.SetRequestHandler(requestHandler)
 	}
 }
 

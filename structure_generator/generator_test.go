@@ -131,6 +131,76 @@ func TestGenerateStructureRejectsInvalidOutputPath(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestGenerateStructureRejectsProviderDerivedPathComponents(t *testing.T) {
+	testCases := []struct {
+		name    string
+		servers []ServerTools
+	}{
+		{
+			name:    "provider traversal",
+			servers: []ServerTools{{ServerName: "../escape"}},
+		},
+		{
+			name: "tool traversal",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "../../config"}},
+			}},
+		},
+		{
+			name: "portable separator",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: `..\config`}},
+			}},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			sentinelPath := filepath.Join(root, "config.json")
+			require.NoError(t, os.WriteFile(sentinelPath, []byte("sentinel"), 0o600))
+
+			err := GenerateStructure(testCase.servers, filepath.Join(root, "hierarchy"))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid")
+			data, readErr := os.ReadFile(sentinelPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, "sentinel", string(data))
+		})
+	}
+}
+
+func TestGeneratedPathRejectsStagingEscape(t *testing.T) {
+	_, err := generatedPath(t.TempDir(), "..", "outside.json")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes staging directory")
+}
+
+func TestGenerateStructureRejectsSymlinkedOutputDirectory(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	require.NoError(t, GenerateStructure([]ServerTools{{
+		ServerName: "alpha",
+		Tools:      []Tool{{Name: "stable"}},
+	}}, targetDir))
+
+	outputDir := filepath.Join(root, "hierarchy")
+	if err := os.Symlink(targetDir, outputDir); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	err := GenerateStructure([]ServerTools{{ServerName: "replacement"}}, outputDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlinked output directory")
+	info, lstatErr := os.Lstat(outputDir)
+	require.NoError(t, lstatErr)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink)
+	stable := readToolNode(t, filepath.Join(targetDir, "alpha", "stable.json"))
+	require.Contains(t, stable.Tools, "stable")
+}
+
 func readToolNode(t *testing.T, path string) ToolNode {
 	t.Helper()
 	data, err := os.ReadFile(path)

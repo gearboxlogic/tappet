@@ -109,6 +109,31 @@ func TestResponseLimitedRoundTripperResetsLimitForEachSSEEvent(t *testing.T) {
 	assert.Equal(t, stream, string(data))
 }
 
+func TestResponseLimitedRoundTripperResetsLimitAtBareCRSSEBoundaries(t *testing.T) {
+	event := "data: 1234\r\r"
+	stream := event + event
+	roundTripper := responseLimitedRoundTripper{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          io.NopCloser(strings.NewReader(stream)),
+				ContentLength: int64(len(stream)),
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream"},
+				},
+			}, nil
+		}),
+		maxBytes: int64(len(event)),
+	}
+
+	response, err := roundTripper.RoundTrip(mustRequest(t))
+	require.NoError(t, err)
+	data, readErr := io.ReadAll(response.Body)
+
+	require.NoError(t, readErr)
+	assert.Equal(t, stream, string(data))
+}
+
 func TestResponseLimitedRoundTripperRejectsOversizedSSEEventBeforeRelease(t *testing.T) {
 	event := "data: 12345\n\n"
 	body := &trackingReadCloser{Reader: strings.NewReader(event)}
@@ -144,6 +169,22 @@ func TestLimitedStdioClientDefersProcessStart(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, mcpClient.NeedManualStart())
 	require.NoError(t, mcpClient.Close())
+}
+
+func TestLimitedStdioTransportRetainsInboundHandlersUntilStart(t *testing.T) {
+	stdioTransport := newLimitedStdioTransport("unused", nil, nil, 1_024)
+	notificationHandler := func(mcp.JSONRPCNotification) {}
+	requestHandler := func(context.Context, transport.JSONRPCRequest) (*transport.JSONRPCResponse, error) {
+		return nil, nil
+	}
+	stdioTransport.SetNotificationHandler(notificationHandler)
+	stdioTransport.SetRequestHandler(requestHandler)
+
+	recorder := &inboundHandlerRecorder{}
+	installInboundHandlers(recorder, stdioTransport.notificationHandler, stdioTransport.requestHandler)
+
+	assert.NotNil(t, recorder.notificationHandler)
+	assert.NotNil(t, recorder.requestHandler)
 }
 
 func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {
@@ -184,6 +225,19 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 type trackingReadCloser struct {
 	io.Reader
 	closed atomic.Bool
+}
+
+type inboundHandlerRecorder struct {
+	notificationHandler func(mcp.JSONRPCNotification)
+	requestHandler      transport.RequestHandler
+}
+
+func (r *inboundHandlerRecorder) SetNotificationHandler(handler func(mcp.JSONRPCNotification)) {
+	r.notificationHandler = handler
+}
+
+func (r *inboundHandlerRecorder) SetRequestHandler(handler transport.RequestHandler) {
+	r.requestHandler = handler
 }
 
 func (r *trackingReadCloser) Close() error {
