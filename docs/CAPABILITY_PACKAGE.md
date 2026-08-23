@@ -357,6 +357,25 @@ the swap remains bound to the old immutable snapshot until that handle is
 released or expires. Uninstall removes the registry reference in the same way.
 A failed install never changes the active generation.
 
+Invocation resolution atomically leases one immutable registry generation and
+its exact operation record, provider binding, provider-configuration
+fingerprint, and schema digest before the invocation enters any queue. That
+lease remains live through argument validation, provider acquisition and call,
+resource materialization, and terminal result or preservation-error
+publication. Reinstall or uninstall prevents new resolutions from using the old
+generation but cannot retarget a queued invocation, combine old arguments with
+a new binding, or close the leased provider generation during a transmitted
+call. Old provider state remains subject to the global residency budget.
+
+If resolution cannot acquire a generation lease because retirement has already
+begun, CapScope may re-resolve entirely against the new generation before
+transmitting bytes. It must revalidate the arguments and provider binding as one
+unit or return typed `operation_generation_stale`; it never mixes generations.
+Once any downstream request byte has been transmitted, the generation cannot
+change and ambiguous-delivery rules apply. Uninstall and reinstall are not
+authorization revocation mechanisms; providers still enforce authorization for
+already admitted calls.
+
 Snapshot objects are reference-counted by active registry generations and by
 explicit, bounded continuation-handle leases. Resolving an artifact reference,
 acquiring its snapshot lease, and issuing a continuation handle for an
@@ -364,14 +383,18 @@ incomplete first response are atomic. Every later chunk uses that opaque handle
 rather than resolving the mutable registry again, so reinstall or uninstall
 cannot interrupt an accepted multi-call read. An unfinished handle lease is
 released on a five-minute idle timeout or a one-hour absolute lifetime. Each
-successful non-final chunk renews the idle deadline without extending the absolute
-deadline. Preparing the final chunk retains the immutable object and an exact,
-idempotent final response for a fixed five-minute replay grace; the same
-reference, offset, and byte limit returns that response without extending the
-grace. Single-chunk reads receive the same protection if reinstall races final
-delivery. Each response reports the effective expiry. Counts of live handles,
-replay records, and retained bytes have finite operator-configurable quotas, and
-admission failure returns a typed error before promising retrieval.
+successful non-final chunk renews the idle deadline without extending the
+absolute deadline. Preparing the final chunk retains the immutable object and
+an exact, idempotent response for a fixed five-minute replay grace. Every prepared
+non-final chunk also has one exact replay record until the next request proves
+receipt and atomically replaces it, or the idle or absolute lease deadline
+passes. The first stable-reference request maps to the same lease and response
+on an exact retry, so loss of the response containing `continuation_ref` is
+recoverable. Replays never extend a deadline. Single-chunk reads receive the
+same protection if reinstall races delivery. Each response reports the
+effective expiry. Counts of live handles, replay records, and retained bytes
+have finite operator-configurable quotas, and admission failure returns a typed
+error before promising retrieval.
 Garbage collection may delete a superseded or uninstalled snapshot only after
 both its registry count and continuation-lease count reach zero. Identical
 content-addressed objects shared by active snapshots remain live until the

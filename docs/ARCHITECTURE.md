@@ -334,13 +334,27 @@ its `expires_at`. Every subsequent chunk passes that continuation reference as
 `ref`; it does not resolve the installed-package or metadata registry again.
 The lease survives reinstall, uninstall, and metadata refresh. It has a
 five-minute idle timeout and a one-hour absolute lifetime; each successful
-non-final chunk renews only the idle deadline. Preparing a final chunk retains
-the immutable object and an exact response replay for five additional minutes
-rather than releasing immediately. Repeating the same input reference, offset,
-and `max_bytes` during that fixed grace returns the byte-identical final response
-without resolving the registry, and does not extend the deadline. This also
-applies to a one-chunk artifact read whose original stable reference becomes
-stale after response preparation. Each response reports its effective expiry.
+non-final chunk renews only the idle deadline.
+
+Before exposing any chunk, CapScope atomically commits an exact response replay
+in the lease's single replaceable replay slot. Repeating the same input
+reference, offset, and `max_bytes` returns that byte-identical response without
+renewing its deadline. For the first incomplete read, an atomic mapping from the
+stable source reference and exact request tuple to the new lease makes a lost
+initial response return the same `continuation_ref`; caller authorization is
+checked before this lookup, but a committed replay takes precedence over later
+registry staleness. A request containing the returned continuation and exact
+`next_offset` proves receipt of the preceding non-final response, so preparing
+that next chunk atomically replaces the prior replay record. Thus one replay
+record per lease protects every prepared chunk without retaining an unbounded
+history.
+
+A non-final replay remains available until it is replaced, the five-minute idle
+deadline passes, or the one-hour absolute deadline passes. Preparing a final
+chunk retains the immutable object and its exact response replay for five
+additional minutes rather than releasing immediately. This also applies to a
+one-chunk artifact read whose original stable reference becomes stale after
+response preparation. Each response reports its effective expiry.
 Live-handle, replay-record, and retained-byte quotas bound this state, and
 admission fails before the first chunk is promised if continuation and replay
 capacity cannot be reserved. These are explicit application handles independent
@@ -417,15 +431,11 @@ lease. If the value is incomplete, that response returns a distinct opaque
 `continuation_ref`; later chunks must use that reference and the exact reported
 `next_offset`. The active lease has a five-minute idle timeout renewed by each
 successful non-final chunk and a one-hour absolute lifetime from the first
-chunk. Each response reports the effective lease expiry. Preparing the final
-chunk marks the retrieval complete but does not release it immediately: CapScope
-retains the object and an exact replay record for a fixed five-minute final-chunk
-grace period. Repeating the same reference, final offset, and `max_bytes` during
-that period returns byte-identical data, digest, completion state, and next
-offset; it does not extend the grace deadline. The final response reports that
-deadline as its `expires_at`, after which the object and lease are released. A
-transport loss after response preparation therefore cannot make the last chunk
-unrecoverable.
+chunk. Every prepared spill chunk uses the single-slot replay and replacement
+rules above. The final response reports its fixed five-minute replay deadline as
+`expires_at`, after which the object and lease are released. A transport loss
+after response preparation therefore cannot make an initial, intermediate, or
+final chunk unrecoverable.
 A read started before the published deadline cannot be reclaimed between chunks
 merely because the original spill expiry passes.
 
@@ -599,8 +609,13 @@ typed resource response under finite per-resource and aggregate byte quotas,
 and stages all snapshot capacity before returning the tool result.
 The block URI is then rewritten to an unguessable
 `capscope-resource://<opaque-handle>` URI. All other block fields remain
-unchanged, and the snapshot record retains the original provider URI, provider
-fingerprint, content digest, and invocation ID for diagnostics and stale checks.
+unchanged. The original provider URI exists only in bounded transient call state
+while CapScope performs `resources/read`; it is treated as a possible signed or
+credential-bearing secret and is excluded from telemetry. After the read
+completes or fails, CapScope discards the plaintext URI. The snapshot record
+retains only an irreversible keyed URI digest for correlation, plus the provider
+fingerprint, content digest, and invocation ID. The digest is never accepted as
+a read route and stale checks do not require the original URI.
 
 On the successful result path, resource snapshots, the fully adapted result
 encoding, and any required result spill are one publication transaction.
@@ -727,7 +742,27 @@ Only `lazy` is required for the first vertical slice. Idle timeout should be con
 
 Process lifecycle is separate from MCP protocol session state. A stateless MCP request model does not require restarting a stdio provider for each call.
 
-#### 6.6.1 Invocation admission and queues
+#### 6.6.1 Provider residency and invocation admission
+
+Provider call limits do not bound the number of completed calls that leave
+processes, connections, SDK clients, and event queues resident. V1-alpha
+therefore permits at most 64 live or starting provider instances globally and
+at most 32 live stdio child providers. One provider-residency slot covers its
+process or connection, SDK client, event queue, and lifecycle tasks. These
+ceilings cannot be disabled, though deployments may lower them. A configured
+provider whose idle shutdown is disabled is non-evictable and reserves its
+residency capacity during startup validation; an impossible reservation set
+fails startup with `provider_capacity_invalid`.
+
+Before starting another provider, the manager reserves capacity atomically. If
+the limit is full, it may close the least-recently-used idle evictable provider
+that has no active or queued call and no startup or shutdown in progress. The
+slot is not reusable until closure is confirmed. If every resident provider is
+active, starting, stopping, or non-evictable, admission returns bounded
+`provider_capacity_exhausted` before process creation or request transmission.
+The error is safe to retry. Startup failures release reservations, shutdown has
+a bounded deadline and failure state, and metrics expose live, reserved,
+evictable, and non-evictable counts without configuration or credential data.
 
 Provider concurrency is admitted through explicit, cancellation-aware bounds,
 not an unbounded goroutine wait on a mutex. V1-alpha permits at most 128 active
@@ -1217,10 +1252,10 @@ returns `continuation_ref`; subsequent requests use it as `ref` with the exact
 `next_offset`, as required by the bounded retrieval lease in section 6.5.1.
 `offset`, `next_offset`, `max_bytes`, and `stored_bytes` count decoded bytes in
 the stored UTF-8 JSON representation, not base64 characters.
-For artifacts and spills, preparing a final response creates the bounded replay
-record defined in section 6.5.1. Retrying the exact input reference, offset, and
-`max_bytes` before its reported expiry returns the same final response even if
-the first transport delivery was lost.
+For artifacts and spills, preparing any response creates or replaces the
+bounded single-slot replay record defined in section 6.5.1. Retrying the exact
+input reference, offset, and `max_bytes` before its effective expiry returns the
+same response even if the first transport delivery was lost.
 
 ### `capscope.invoke`
 
@@ -1284,6 +1319,8 @@ Correctness:
 - provider authorization failures remain intact
 - structured results survive proxying
 - oversized structured results can be retrieved completely without silent truncation
+- every prepared read chunk is exactly retryable until receipt is proven or its
+  bounded replay deadline passes
 - request and provider-message nesting and syntax-node limits fire before
   general object construction
 - broker requests and provider-originated events cannot create unbounded queues
@@ -1291,10 +1328,13 @@ Correctness:
 - provider schemas cannot trigger external I/O or unbounded validation work
 - post-call preservation failures retain completed-call and original `isError` state
 - rewritten resource links remain readable for their promised post-result lifetime
+- plaintext provider resource URIs do not persist after materialization
 - every published cross-call handle resolves across replicas, or startup rejects
   the unsupported replicated configuration
 - every continuation or retained-data handle is unguessable and excluded from
   raw telemetry
+- queued and active invocations cannot mix package or provider-binding generations
+- live provider instances and stdio children remain within global budgets
 - provider processes start and stop predictably
 
 Efficiency:
