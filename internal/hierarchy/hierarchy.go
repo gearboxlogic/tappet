@@ -485,9 +485,10 @@ type ServerRegistry struct {
 }
 
 type providerLoad struct {
-	done   chan struct{}
-	client ProviderClient
-	err    error
+	done                     chan struct{}
+	client                   ProviderClient
+	err                      error
+	initiatingCallerCanceled bool
 }
 
 // ProviderClient is the part of a downstream MCP client used by the hierarchy.
@@ -593,7 +594,7 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
-				if errors.Is(load.err, context.Canceled) || errors.Is(load.err, context.DeadlineExceeded) {
+				if load.initiatingCallerCanceled {
 					continue
 				}
 				return load.client, load.err
@@ -610,6 +611,7 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 		r.mu.Unlock()
 
 		mcpClient, err := r.clientFactory(ctx, serverName, cfg)
+		initiatingCallerCanceled := ctx.Err() != nil && errors.Is(err, ctx.Err())
 
 		r.mu.Lock()
 		if err == nil && r.closed {
@@ -620,6 +622,7 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 			load.client = mcpClient
 		}
 		load.err = err
+		load.initiatingCallerCanceled = initiatingCallerCanceled
 		delete(r.clientLoads, serverName)
 		close(load.done)
 		r.mu.Unlock()

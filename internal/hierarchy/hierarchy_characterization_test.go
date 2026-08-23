@@ -357,6 +357,48 @@ func TestLiveWaiterRetriesLoadCanceledByInitiatingCaller(t *testing.T) {
 	loadMu.Unlock()
 }
 
+func TestLiveWaiterPreservesProviderLocalLoadTimeout(t *testing.T) {
+	firstLoadStarted := make(chan struct{})
+	releaseFirstLoad := make(chan struct{})
+	var loadCount int
+	var loadMu sync.Mutex
+	unexpectedRetry := errors.New("provider load retried")
+	registry := newServerRegistry(characterizationConfigs(), func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error) {
+		loadMu.Lock()
+		loadCount++
+		currentLoad := loadCount
+		loadMu.Unlock()
+		if currentLoad != 1 {
+			return nil, unexpectedRetry
+		}
+		close(firstLoadStarted)
+		<-releaseFirstLoad
+		return nil, context.DeadlineExceeded
+	})
+	defer registry.Close()
+
+	initiatorResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		initiatorResult <- err
+	}()
+	<-firstLoadStarted
+
+	waiterResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		waiterResult <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(releaseFirstLoad)
+
+	assert.ErrorIs(t, <-initiatorResult, context.DeadlineExceeded)
+	assert.ErrorIs(t, <-waiterResult, context.DeadlineExceeded)
+	loadMu.Lock()
+	assert.Equal(t, 1, loadCount)
+	loadMu.Unlock()
+}
+
 func TestProviderFinishingAfterRegistryCloseIsClosed(t *testing.T) {
 	loadStarted := make(chan struct{})
 	releaseLoad := make(chan struct{})
