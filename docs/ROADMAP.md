@@ -86,10 +86,9 @@ Work:
 - optional path-constrained search
 - explainable match reasons
 - deterministic cursor pagination for `describe` materialization
-- exact operation-schema selectors in `describe`
 - Agent Skill body reads
 - individual reference reads
-- bounded chunk retrieval for schemas, skills, and references
+- bounded chunk retrieval for skills and references
 
 Initial benchmark corpus:
 
@@ -104,8 +103,10 @@ Exit criteria:
 - 100% exact-ID recall
 - agreed top-5 natural-language recall target on a versioned corpus
 - no unrelated full skill bodies or operation schemas in search output
-- `describe` returns schema content or an exact schema reference only for explicitly selected operation IDs
-- every accepted materialized artifact remains completely retrievable within response bounds
+- `describe` returns bounded package structure without requiring provider
+  metadata or starting a provider
+- every accepted skill or reference artifact remains completely retrievable
+  within response bounds
 - large capability structures remain completely retrievable across stable pages
 - deterministic results across runs
 
@@ -118,6 +119,8 @@ Work:
 - one provider manager replacing overlapping lazy-client paths
 - disk metadata cache with version and schema digests
 - cache priming during capability installation and explicit operator refresh
+- exact operation-schema selectors in `describe`
+- bounded chunk retrieval for cached schemas
 - lazy start
 - idle shutdown
 - reconnect and failure backoff
@@ -134,6 +137,8 @@ Exit criteria:
 
 - search and describe never start providers implicitly
 - an empty cache yields typed metadata-unavailable cards until install-time refresh, explicit refresh, or first invoke populates it
+- `describe` returns schema content or an exact digest-bound schema reference
+  only for explicitly selected operation IDs with available cached metadata
 - first invoke starts only the selected provider
 - idle provider stops and reconnects on next invoke
 - reconnect refreshes schemas before invoke and stale arguments never reach the provider
