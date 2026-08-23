@@ -222,6 +222,22 @@ and execution-boundary rules; listing a script would never make it executable.
 - Provider bindings live in the capability manifest.
 - CapScope must validate skills with the official reference validator where practical.
 
+### Bounded `SKILL.md` validation
+
+The loader reads each `SKILL.md` through a 1 MiB bounded reader and extracts at
+most 64 KiB of YAML frontmatter before parsing metadata. The frontmatter scanner
+applies the same preconstruction safety rules as the capability manifest: a
+maximum nesting depth of 64, at most 16,384 syntax nodes, no anchors, aliases,
+or merge keys, and no duplicate mapping keys. It enforces those budgets while
+scanning syntax events, before alias resolution or semantic allocation.
+
+Only the resulting bounded metadata record is passed to the Agent Skills
+reference validation path. If the official validator API reparses raw
+frontmatter without equivalent reader, depth, node, and alias-expansion limits,
+CapScope must place a bounded adapter in front of it or reject the skill; it must
+not hand untrusted package bytes to an unbounded parser. The `SKILL.md` body is
+snapshotted only after both bounded parsing and reference validation succeed.
+
 ## 7. Operations
 
 ```yaml
@@ -407,6 +423,11 @@ canonical encoded JSON representation. These limits cover material returned by
 | YAML nesting depth | 64 |
 | YAML syntax nodes | 16,384 |
 | YAML aliases, anchors, or merge keys | 0 |
+| encoded `SKILL.md` input | 1 MiB |
+| `SKILL.md` YAML frontmatter | 64 KiB |
+| frontmatter nesting depth | 64 |
+| frontmatter syntax nodes | 16,384 |
+| frontmatter aliases, anchors, or merge keys | 0 |
 | skills | 32 entries |
 | skill resources | 128 entries per package, 32 per skill |
 | operations | 128 entries |
