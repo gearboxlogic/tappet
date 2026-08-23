@@ -339,11 +339,17 @@ non-final chunk renews only the idle deadline.
 Before exposing any chunk, Tappet atomically commits an exact response replay
 in the lease's single replaceable replay slot. Repeating the same input
 reference, offset, and `max_bytes` returns that byte-identical response without
-renewing its deadline. For the first incomplete read, an atomic mapping from the
-stable source reference and exact request tuple to the new lease makes a lost
-initial response return the same `continuation_ref`; caller authorization is
-checked before this lookup, but a committed replay takes precedence over later
-registry staleness. A request containing the returned continuation and exact
+renewing its deadline. Every initial stable-reference read includes a
+caller-generated `attempt_id` containing at least 128 bits of randomness and
+unique to that logical read attempt. An atomic mapping from the authorized
+requester scope, stable source reference, `attempt_id`, offset, and `max_bytes`
+to the new lease makes a lost initial response return the same
+`continuation_ref`. Independent readers use distinct attempt IDs and therefore
+receive distinct leases even when every other input is identical. Caller
+authorization is checked before this lookup, but a committed replay takes
+precedence over later registry staleness. The attempt ID is bounded, is not
+itself a read route, and is excluded from raw telemetry. A request containing
+the returned continuation and exact
 `next_offset` proves receipt of the preceding non-final response, so preparing
 that next chunk atomically replaces the prior replay record. Thus one replay
 record per lease protects every prepared chunk without retaining an unbounded
@@ -501,22 +507,30 @@ error retains the original numeric code, uses the fixed message
 
 `tappet.read` retrieves that error reference in bounded chunks; reassembly
 restores the exact original code, message, and data. The outer envelope never
-copies a partial provider `data` value or truncates the provider message. If
-error-spill admission fails, Tappet returns the distinct bounded
-`downstream_error_spill_failed` proxy error and does not pretend the original
-error was preserved. Its bounded data still records
-`provider_call_state: "completed"`, `provider_error_received: true`, and
-`retry_safe: false`, because Tappet received the provider's terminal JSON-RPC
-error even though it could not preserve the full payload. MCP results with
-`isError: true` remain typed `CallToolResult` values and use the ordinary result
-path above.
+copies a partial provider `data` value or truncates the provider message.
+Before transmitting any invocation byte, admission reserves one terminal-error
+object, its potential retrieval lease, and enough bytes for the maximum accepted
+downstream JSON-RPC error. If that reservation is unavailable, invocation fails
+with typed `provider_error_capacity_exhausted`,
+`provider_call_state: "not_started"`, and `retry_safe: true`. An inline error
+releases the unused reservation; an oversized accepted error commits its spill
+from the reservation.
+Quota exhaustion therefore cannot replace a received authorization or other
+provider error. A storage-integrity failure despite a committed reservation is
+reported as `downstream_error_preservation_failed`, with the completed-call and
+unsafe-retry fields, and is an operational fault rather than an admission path.
+MCP results with `isError: true` remain typed `CallToolResult` values and use the
+ordinary result path above.
 
 The spill store must enforce finite, operator-configurable limits for incoming
 provider-result or error bytes, bytes per spill object, aggregate live bytes,
 live object count, object lifetime, and bytes per `read`. Provider adapters
 enforce the incoming limit while reading, before unbounded decoding or
 allocation. Spill admission reserves aggregate bytes, an object slot, and one
-potential retrieval-lease slot atomically. It may reclaim an inactive object
+potential retrieval-lease slot atomically. Terminal-error reservations are
+charged to the same finite aggregate budgets before provider transmission and
+cannot be borrowed by ordinary result spills. The store may reclaim an inactive
+object
 after its published retrieval-start deadline or an active object after its idle
 or absolute lease expires, but it must not evict an active object promised to a
 reader. An oversized value or exhausted store returns a distinct typed error
@@ -578,6 +592,15 @@ budget. A transport or SDK integration that cannot enforce the byte, depth, and
 node-count boundaries below its general object decoder is not supported on an
 untrusted broker endpoint.
 
+During tokenization, every object keeps a bounded set of its decoded member
+names. A repeated name, including an escape-equivalent spelling such as `id`
+and `\u0069d`, rejects the whole request with
+`broker_message_duplicate_key` before general decoding, schema validation,
+provider startup, or transmission. This applies to the outer JSON-RPC object
+and every nested object, especially `invoke.arguments`, so Tappet and a provider
+cannot select different occurrences. The byte and node budgets above bound the
+temporary key sets.
+
 The tokenizer retains each JSON number's original validated lexeme. Invocation
 arguments remain raw numeric tokens or `json.Number`-equivalent decimal strings
 through schema validation and downstream encoding; validation uses exact
@@ -609,6 +632,7 @@ decoding, V1 applies the remaining tool-input limits before dispatch:
 | capability or operation ID | 128 bytes |
 | hierarchy `path` | 256 bytes |
 | cursor or artifact `ref` | 2,048 bytes |
+| initial read `attempt_id` | 128 bytes |
 | `include` values | 8 entries, 64 bytes each |
 | `operation_schemas` | 32 exact IDs |
 | `limit` or `child_limit` | 100 items each |
@@ -731,7 +755,13 @@ transports pause before consuming another frame when no ingress slot exists.
 Capacity reservation starts a non-renewable 30-second ingress deadline covering
 the complete body or frame read, bounded tokenization, and method admission;
 progress does not extend it. HTTP additionally sets a five-second connection
-header-read deadline before handler admission. Expiry releases every count and
+header-read deadline before handler admission. The HTTP listener also acquires
+one of at most 256 global open-connection slots before calling its underlying
+`Accept` and returning a connection to `net/http`; the slot remains charged
+through keep-alive or streaming use and is released only when the connection
+closes. At capacity, the listener backpressures acceptance or closes a newly
+accepted socket without starting a per-connection goroutine. HTTP keep-alive
+connections have a finite 60-second idle timeout. Expiry releases every count and
 byte reservation, cancels decoding, and closes or invalidates the affected
 request transport; HTTP may return a bounded 408 when safe. The ordinary
 request deadline begins no later than ingress reservation, so method decoding
@@ -1254,6 +1284,7 @@ Input:
 {
   "capability_id": "software.github.ci-debugging",
   "ref": "schema:v1:provider-fingerprint:schema-digest:inspect-failed-checks",
+  "attempt_id": "read:client-generated-128-bit-random-value",
   "offset": 0,
   "max_bytes": 65536
 }
@@ -1264,6 +1295,10 @@ schema reference returned by `describe`. Its encoded identity binds the
 operation ID, provider configuration fingerprint, and schema digest. `read`
 must return a typed stale-reference error if any binding no longer matches; it
 must never resolve the token to whichever schema is current at read time.
+`attempt_id` is required when `ref` is a stable artifact or spill reference;
+the caller reuses it only to retry that same initial request. Continuation
+requests use the returned continuation reference and do not reuse the attempt
+ID.
 
 Output: one operation schema, skill body, permitted reference resource, or
 bounded chunk of one of those artifacts. A complete artifact is returned inline

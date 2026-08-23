@@ -81,6 +81,8 @@ Exit criteria:
 
 - at least three hand-reviewed packages load
 - duplicate and invalid references fail deterministically
+- unknown manifest fields at every mapping level reject the complete staged
+  package
 - FIFOs, devices, sockets, directories, and other non-regular package artifacts
   fail without blocking or reading from them
 - no provider credentials appear in packages
@@ -130,6 +132,8 @@ Exit criteria:
   including after reinstall or uninstall
 - every prepared artifact chunk, including the first, remains exactly retryable
   until receipt is proven or its bounded lease deadline passes
+- independent initial readers of the same artifact receive separate leases,
+  while exact retries with one attempt ID recover the same first response
 - concurrent requests cannot advance one continuation lease along competing
   chunk boundaries
 - large capability structures remain completely retrievable across stable pages
@@ -197,6 +201,10 @@ Exit criteria:
   or its bounded replay deadline passes
 - JSON number lexemes survive invocation validation, provider forwarding, and
   structured result or error preservation without `float64` rounding
+- duplicate JSON object members are rejected before argument validation or
+  provider transmission
+- terminal provider-error spill capacity is reserved before transmission, so
+  quota exhaustion cannot replace an authorization or other provider error
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
 - duplicate provider tool names across one metadata refresh reject the snapshot
   before map insertion or schema selection
@@ -247,6 +255,8 @@ Exit criteria:
   before retaining unbounded request state
 - pre-decode header, body, and frame deadlines release ingress reservations held
   by stalled clients
+- listener-level HTTP connection admission bounds sockets and goroutines before
+  header parsing
 - broker and downstream nesting and syntax-node limits are enforced during
   tokenization before general JSON object construction
 - irrelevant capabilities do not enter the transcript
