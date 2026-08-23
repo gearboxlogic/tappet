@@ -461,13 +461,16 @@ stateless horizontal-scaling design.
 
 #### 6.5.2 Bounded broker requests
 
-Broker inputs are bounded before JSON decoding. V1 accepts at most 1 MiB of
-encoded JSON-RPC request data per message. HTTP rejects an oversized declared
-body and applies a limited reader to chunked or undeclared bodies. Stdio and
-other framed transports stop reading once the frame limit is reached; they must
-not accumulate an unbounded line or frame first. A transport or SDK integration
-that cannot enforce this pre-decode boundary is not supported on an untrusted
-broker endpoint.
+Broker inputs are bounded before constructing a JSON object graph. V1 accepts
+at most 1 MiB of encoded JSON-RPC request data per message. HTTP rejects an
+oversized declared body and applies a limited reader to chunked or undeclared
+bodies. Stdio and other framed transports stop reading once the frame limit is
+reached; they must not accumulate an unbounded line or frame first. A
+depth-aware tokenizing decoder then rejects invalid UTF-8 or syntax and stops as
+soon as object or array nesting would exceed 64; it never materializes nodes
+beyond that depth. A transport or SDK integration that cannot enforce the byte
+and token-depth boundaries below its general object decoder is not supported on
+an untrusted broker endpoint.
 
 An oversized inbound message invalidates the affected transport. CapScope may
 emit a bounded `broker_frame_limit_exceeded` response when the framing still
@@ -479,7 +482,8 @@ streaming transports close the stream. V1 does not perform unbounded draining
 or attempt in-place resynchronization after the frame boundary is lost. A client
 may continue only through a fresh transport connection.
 
-After bounded decoding, V1 applies these tool-input limits before dispatch:
+The depth limit is enforced during tokenization. After bounded, depth-checked
+decoding, V1 applies the remaining tool-input limits before dispatch:
 
 | Input | Limit |
 | --- | ---: |
@@ -531,17 +535,34 @@ typed resource contents without restarting or consulting the provider.
 URIs are rejected; possession of the broker-issued URI is required. A snapshot
 is admitted only when its complete `resources/read` response fits the broker
 resource-response limit, so this route never truncates or flattens resource
-contents. Handles expire under the same bounded temporary-store rules as spill
-objects and are bearer secrets excluded from telemetry.
+contents. Handles are bearer secrets excluded from telemetry and have bounded
+lifetimes independent of provider connections.
+
+For an inline result, every associated resource handle remains live for at
+least five minutes after result publication. For a spilled result, its resource
+snapshots are pinned through the parent result handle's expiry plus a five-minute
+link-use grace period. Returning the final spill chunk atomically confirms that
+each associated resource expiry is at least five minutes after that response;
+because a spill cannot be read after its own expiry, this never extends a
+resource beyond the already reserved parent-expiry-plus-grace bound. The
+publication transaction reserves retained bytes and object slots for that full
+interval. If it cannot reserve the linked lifetime, invocation fails before any
+handle is published. Reading a resource does not renew it indefinitely.
 
 If the provider does not support `resources/read`, the link cannot be read in
 the current session, any link or byte quota is exceeded, or snapshot admission
 fails, `invoke` returns a bounded `resource_link_unmaterializable` preservation
-error. It does not emit a dangling rewritten link, a partial resource snapshot,
-or a provider URI that the CapScope-connected harness cannot resolve. This
-scoped proxy does not expose a provider-wide resource catalog and does not add
-dynamic tools; implementing it belongs to the portable broker milestone, not
-Milestone 0.
+error. Because the downstream `tools/call` has already returned at this point,
+the error explicitly reports `provider_call_state: "completed"`, the original
+`provider_is_error` value, `provider_result_published: false`, and
+`retry_safe: false`, along with the invocation ID. The broker-generated
+preservation `CallToolResult` has `IsError: true`, but that broker classification
+does not replace the separately recorded provider value or describe the
+provider operation as failed or outcome-unknown. It does not emit a dangling
+rewritten link, a partial resource snapshot, or a provider URI that the
+CapScope-connected harness cannot resolve. This scoped proxy does not expose a
+provider-wide resource catalog and does not add dynamic tools; implementing it
+belongs to the portable broker milestone, not Milestone 0.
 
 When downstream `resources/read` returns a structured JSON-RPC error, the
 preservation error retains the original numeric code, message, and structured
@@ -597,11 +618,13 @@ idempotency and a replay token; capability packages do not imply either.
 
 Every message received from a downstream provider has a finite pre-decode
 limit, regardless of method or direction of the JSON-RPC exchange. V1 permits
-at most 16 MiB of encoded data per downstream protocol message. The limit
-applies to initialize and discovery responses, invocation results, errors,
-notifications, ping responses, progress events, and unsolicited requests or
-callbacks. The stricter metadata and result-ingestion quotas still apply after
-this transport boundary.
+at most 16 MiB of encoded data and 128 levels of JSON object/array nesting per
+downstream protocol message. A depth-aware token scanner enforces both limits
+before the SDK constructs the general object graph. The limits apply to
+initialize and discovery responses, invocation results, errors, notifications,
+ping responses, progress events, and unsolicited requests or callbacks. The
+stricter metadata and result-ingestion quotas still apply after this transport
+boundary.
 
 Stdio adapters enforce the ceiling while reading a frame and never accumulate
 an oversized line first. HTTP adapters use bounded body readers even without a
@@ -609,14 +632,15 @@ valid `Content-Length`; streaming transports enforce the limit independently
 for each event. The bound must sit below the SDK decoder. An SDK or transport
 that cannot expose a pre-decode boundary is unsupported for downstream V1 use.
 
-An exceeded frame returns `provider_frame_limit_exceeded`, fails every affected
-in-flight request, and closes the protocol connection. CapScope terminates a
-stdio child whose stream can no longer be trusted and closes an HTTP or event
-stream session; it does not skip bytes or attempt in-place resynchronization.
-The prior atomic metadata-cache snapshot remains intact, but no further request
-is accepted until the provider manager establishes and initializes a fresh
-connection. Repeated violations feed normal failure backoff and bounded
-telemetry.
+An exceeded byte limit returns `provider_frame_limit_exceeded`; an exceeded
+token-depth limit returns `provider_message_depth_exceeded`. Either failure
+fails every affected in-flight request and closes the protocol connection.
+CapScope terminates a stdio child whose stream can no longer be trusted and
+closes an HTTP or event stream session; it does not skip bytes or attempt
+in-place resynchronization. The prior atomic metadata-cache snapshot remains
+intact, but no further request is accepted until the provider manager
+establishes and initializes a fresh connection. Repeated violations feed normal
+failure backoff and bounded telemetry.
 
 ### 6.7 Metadata cache
 
@@ -656,6 +680,35 @@ reported freshness state records which mode was used. If a digest changed,
 CapScope atomically replaces the snapshot and invalidates old schema references.
 If refresh fails, invocation fails without calling the provider; known-stale
 metadata is never used as an invocation contract.
+
+V1 accepts only self-contained provider schemas. A `$ref` value may be `#` or a
+same-document JSON Pointer beginning with `#/`; ingestion resolves and validates
+that target exclusively within the received schema. V1 rejects `$id`,
+`$anchor`, `$dynamicAnchor`, `$dynamicRef`, non-fragment references, unresolved
+pointers, and reference cycles with `provider_schema_unsupported`. The schema
+compiler has no network, filesystem, or general URI loader, so schema refresh or
+argument validation can never fetch provider-controlled resources. A later
+cache-only schema-resource registry requires a separate design and is not an
+implicit fallback.
+
+Schema safety has structural and work budgets in addition to byte quotas. Before
+compilation or cache publication, each input or output schema is limited to 1
+MiB encoded, depth 64, 16,384 syntax nodes, 1,024 local references, 64 reference
+hops, 64 alternatives in any one applicator, and 1,024 alternatives across
+`allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, and conditional array or
+object applicators. Regular expressions are limited to 256 per schema and 4,096
+bytes each and must use a linear-time engine. Exceeding a structural budget
+returns `provider_schema_limit_exceeded` and leaves the previous atomic cache
+snapshot unchanged.
+
+Compilation and per-invocation validation each receive a deadline,
+cancellation signal, memory ceiling, and deterministic work counter; validation
+permits at most 1,000,000 keyword or instance-evaluation steps. The validator
+checks cancellation and decrements the counter before descending into a schema
+node or applicator branch. A library that cannot provide those hooks must run in
+a killable resource-bounded worker, not unchecked in the broker process.
+Exhaustion returns `provider_schema_validation_limit_exceeded`, does not call the
+provider, and is distinct from ordinary invalid arguments.
 
 Metadata ingestion is bounded independently of individual schemas. V1-alpha
 hard limits per provider refresh are 4 MiB per encoded list response, 128 list
@@ -1030,6 +1083,10 @@ Correctness:
 - provider authorization failures remain intact
 - structured results survive proxying
 - oversized structured results can be retrieved completely without silent truncation
+- request and provider-message nesting limits fire before general object construction
+- provider schemas cannot trigger external I/O or unbounded validation work
+- resource-preservation failures retain completed-call and original `isError` state
+- rewritten resource links remain readable for their promised post-result lifetime
 - provider processes start and stop predictably
 
 Efficiency:

@@ -274,6 +274,11 @@ The downstream provider owns the executable input and output schemas.
 
 CapScope caches those schemas and records a digest. The manifest may later permit a stricter compatibility schema or fixture, but V1 should not duplicate every provider schema in YAML.
 
+Provider ownership does not authorize schema-driven I/O or unbounded
+validation. V1 accepts only bounded, self-contained schemas with same-document
+JSON Pointer references; it rejects external or dynamic references and enforces
+the compilation and evaluation budgets in `docs/ARCHITECTURE.md`.
+
 An operation should fail visibly when the provider tool no longer exists or its schema becomes incompatible.
 
 ## 8. Context references
