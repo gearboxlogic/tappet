@@ -86,6 +86,8 @@ Exit criteria:
 - no provider credentials appear in packages
 - validation and normalized records use private staged bytes even when source
   files mutate during installation
+- queued and active invocations retain one immutable package and provider-binding
+  generation through terminal publication
 - current tool mappings can be represented without loss
 
 ## Milestone 3: Catalog search and progressive reads
@@ -126,6 +128,8 @@ Exit criteria:
   available across a concurrent reinstall or uninstall
 - every continuation handle is unguessable and excluded from raw telemetry,
   including after reinstall or uninstall
+- every prepared artifact chunk, including the first, remains exactly retryable
+  until receipt is proven or its bounded lease deadline passes
 - large capability structures remain completely retrievable across stable pages
 - deterministic results across runs
 
@@ -148,6 +152,8 @@ Work:
 - same-provider concurrency policy
 - different-provider parallelism
 - bounded global and per-provider active/queued invocation admission
+- bounded global live-provider and stdio-child admission, including explicit
+  capacity reservations for non-evictable providers
 - explicit refresh
 - conservative cache invalidation
 - migrate inherited literal provider credential inputs only through a tested
@@ -171,14 +177,18 @@ Exit criteria:
 - an ambiguously delivered provider call is never replayed automatically
 - saturated provider queues reject new work before enqueueing, while queued
   cancellation is prompt and observable
+- sequential use of many providers cannot exceed live-provider or child-process
+  budgets, even when idle shutdown is disabled
+- reinstall and uninstall cannot retarget or tear down a queued or transmitted
+  invocation leased to an older registry generation
 - post-call spill failures report the completed provider outcome and remain
   explicitly unsafe to retry
 - large output cannot silently consume unbounded model context or lose structured content
 - spill limits fail explicitly without exceeding per-result or aggregate quotas
 - an accepted spill remains completely retrievable through a bounded active
   continuation lease even when its original start-by deadline passes
-- every prepared final read chunk remains exactly replayable through a bounded
-  grace period
+- every prepared spill chunk remains exactly replayable until receipt is proven
+  or its bounded replay deadline passes
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
 - duplicate provider tool names across one metadata refresh reject the snapshot
   before map insertion or schema selection
@@ -234,6 +244,8 @@ Exit criteria:
 - structured result survives proxying
 - every returned resource link resolves through the scoped broker resource
   route without exposing unrelated provider resources
+- plaintext downstream resource URIs are discarded after materialization and
+  never persist in snapshots or telemetry
 - failed result publication releases staged resource capacity and preserves any
   structured downstream resource-read error
 - resource-read error spills commit independently after staged resource handles
