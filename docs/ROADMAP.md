@@ -117,6 +117,7 @@ Work:
 
 - one provider manager replacing overlapping lazy-client paths
 - disk metadata cache with version and schema digests
+- cache priming during capability installation and explicit operator refresh
 - lazy start
 - idle shutdown
 - reconnect and failure backoff
@@ -131,12 +132,14 @@ Work:
 
 Exit criteria:
 
-- search and describe work from cache without starting providers
+- search and describe never start providers implicitly
+- an empty cache yields typed metadata-unavailable cards until install-time refresh, explicit refresh, or first invoke populates it
 - first invoke starts only the selected provider
 - idle provider stops and reconnects on next invoke
 - reconnect refreshes schemas before invoke and stale arguments never reach the provider
 - large output cannot silently consume unbounded model context or lose structured content
 - spill limits fail explicitly without exceeding per-result or aggregate quotas
+- provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
 
 ## Milestone 5: Portable broker vertical slice
 

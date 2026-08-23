@@ -90,6 +90,12 @@ match reason
 
 Cards must not contain complete operation schemas, full skill bodies, or large reference content.
 
+Package loading enforces the card field and aggregate byte limits in
+`CAPABILITY_PACKAGE.md`. Runtime match metadata is also bounded to 512 encoded
+JSON bytes per result, and the whole search response remains subject to the
+broker response limit. Search fails explicitly rather than truncating a card or
+match explanation.
+
 ### 3.3 Skill
 
 A skill is procedural knowledge using the Agent Skills format. CapScope should index only the `name` and `description` for discovery, return the complete `SKILL.md` only when requested, and return supporting resources individually.
@@ -434,6 +440,16 @@ Cache:
 
 The cache should permit discovery while a lazy provider is stopped.
 
+A missing cache entry is not silently populated by search or ordinary
+`describe`. Capability installation and the explicit operator refresh command
+are the normal cache-prime paths and may start the selected provider. If neither
+has run, operation cards report `metadata_state: "unavailable"` and omit schema
+references and digests. An exact schema selection returns a typed
+`metadata_unavailable` result with the provider ID and refresh instruction.
+First invocation may connect and populate the cache, but it must refresh
+metadata and validate arguments before calling the tool. This behavior keeps
+browsing lazy while making an empty or deleted cache observable.
+
 Cached schemas are snapshots. Search and describe responses sourced from a
 stopped provider must report the observation time, provider fingerprint, schema
 digest, and cached freshness state. Every provider connection or reconnection
@@ -443,6 +459,18 @@ digest changed, CapScope atomically replaces the snapshot, invalidates old
 schema references, and validates arguments only against the refreshed schema.
 If refresh fails, invocation fails without calling the provider; stale metadata
 is never used as an invocation contract.
+
+Metadata ingestion is bounded independently of individual schemas. V1-alpha
+hard limits per provider refresh are 4 MiB per encoded list response, 128 list
+pages, 4,096 total metadata items, 24 MiB of aggregate schema bytes, and 32 MiB
+of aggregate normalized metadata. The adapter enforces response bytes while
+reading and item, page, and aggregate counters before accumulation or cache
+writes. A repeated or non-advancing cursor is an error. Exceeding any quota
+fails the refresh with a distinct `metadata_limit_exceeded` classification and
+does not replace the previous atomic cache snapshot. Deployments also configure
+a finite total metadata-cache quota across providers; reaching it fails refresh
+without unbounded disk growth. Changing these V1-alpha hard limits requires an
+explicit architecture and benchmark update.
 
 The cache must be invalidated by:
 
@@ -647,10 +675,13 @@ selector and may be supplied on any page; selected schema content counts toward
 that response's size bound but does not change the structure cursor. Individual
 metadata entries are subject to package validation limits.
 
-Each operation card includes its schema reference and digest. Full skill bodies
-remain deferred to `read`. Schemas for unselected operations are never returned.
-Unknown operation IDs fail explicitly, and the schema selector count and total
-response size are bounded independently of structure pagination.
+Each operation card with cached metadata includes its schema reference, digest,
+observation time, and freshness state. With an empty cache it instead reports
+`metadata_state: "unavailable"`; an exact schema selector then returns the typed
+cache-miss result defined in section 6.7. Full skill bodies remain deferred to
+`read`. Schemas for unselected operations are never returned. Unknown operation
+IDs fail explicitly, and the schema selector count and total response size are
+bounded independently of structure pagination.
 
 ### `capscope.read`
 
