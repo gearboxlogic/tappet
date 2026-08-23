@@ -159,6 +159,10 @@ capscope.read
 capscope.invoke
 ```
 
+The fixed tool surface is accompanied by the scoped MCP `resources/read` proxy
+defined in `ARCHITECTURE.md`; it does not enumerate a provider-wide resource
+catalog or add dynamic tools.
+
 Test environment:
 
 - two real downstream MCP servers
@@ -166,6 +170,7 @@ Test environment:
 - one Agent Skill
 - one context reference
 - one provider with many tools where a capability selects only a subset
+- one provider tool that returns a provider-scoped resource link
 
 Measure:
 
@@ -184,6 +189,8 @@ Exit criteria:
 - irrelevant capabilities do not enter the transcript
 - provider authorization still applies
 - structured result survives proxying
+- every returned resource link resolves through the scoped broker resource
+  route without exposing unrelated provider resources
 - results beat eager exposure on context size without unacceptable task-success loss
 
 ## Milestone 6: Scale and retrieval evaluation
