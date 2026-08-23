@@ -320,9 +320,11 @@ An inline `invoke` result keeps the downstream MCP result at the outer protocol
 level. CapScope forwards every provider content block, including image, audio,
 embedded-resource, and resource-link blocks, in the outer
 `CallToolResult.Content`; it also preserves `StructuredContent` and `IsError`.
-CapScope invocation metadata goes in `_meta.capscope` and does not replace or
-wrap provider content. Existing provider `_meta` fields remain intact, and the
-reserved `capscope` key is merged without overwriting other metadata:
+Because downstream `_meta` keys are arbitrary, CapScope uses a collision-safe
+proxy envelope at `_meta["io.capscope.proxy"]`. The complete original downstream
+`_meta` object is stored unchanged under `downstream_meta`, while broker fields
+go under `invocation`. Even a provider-defined `capscope` or
+`io.capscope.proxy` key therefore remains recoverable:
 
 ```json
 {
@@ -330,9 +332,14 @@ reserved `capscope` key is merged without overwriting other metadata:
   "structuredContent": {"provider": "value"},
   "isError": false,
   "_meta": {
-    "capscope": {
-      "invocation_id": "invocation:opaque-id",
-      "disposition": "inline"
+    "io.capscope.proxy": {
+      "invocation": {
+        "invocation_id": "invocation:opaque-id",
+        "disposition": "inline"
+      },
+      "downstream_meta": {
+        "capscope": {"provider_owned": true}
+      }
     }
   }
 }
@@ -341,10 +348,11 @@ reserved `capscope` key is merged without overwriting other metadata:
 If the complete typed provider result exceeds the inline limit but remains
 within the accepted result limit, CapScope stores a lossless UTF-8 JSON encoding
 in a temporary spill object. `invoke` preserves the provider's outer `IsError`
-classification and returns compact spill metadata in `_meta.capscope` and
-structured content. Its outer content contains only a bounded notice directing
-the caller to `capscope.read`; it never presents a partial provider content
-array as complete:
+classification and returns compact spill metadata in
+`_meta["io.capscope.proxy"].invocation` and structured content. The original
+downstream metadata remains under `downstream_meta`. Its outer content contains
+only a bounded notice directing the caller to `capscope.read`; it never presents
+a partial provider content array as complete:
 
 ```json
 {
@@ -564,6 +572,23 @@ Current code uses `mcp-go v0.43.2`. `mark3labs/mcp-go` merged 2026-07-28 support
 
 Do not switch Go SDKs without a focused comparison. First test the current SDK line at a revision containing modern support.
 
+### 9.1 Multi-round-trip requests
+
+CapScope must advertise downstream client capabilities only when its provider
+adapter can service them. The portable V1 broker does not advertise sampling,
+elicitation, roots, or other provider-to-client callback capabilities and does
+not service them locally. If a provider sends an unnegotiated callback anyway,
+the adapter returns a method-not-supported or provider-incompatible error
+within the invocation deadline. It must not wait for a callback that cannot
+arrive, invoke an LLM, or route to a model on its own.
+
+A later relay path is permitted only when the outward harness negotiated the
+same capability and the transport and SDK expose a tested correlation
+mechanism. Such a relay must bind the callback to one explicit invocation,
+propagate cancellation, enforce round-trip, byte, and time limits, and preserve
+the harness response without crossing callers. Capability packages cannot
+enable unsupported callbacks or override this negotiation policy.
+
 ## 10. Current implementation mapping
 
 | Current code | Reusable idea | Required change |
@@ -604,16 +629,28 @@ Input:
 {
   "capability_id": "software.github.ci-debugging",
   "include": ["skills", "operations"],
-  "operation_schemas": ["inspect-failed-checks"]
+  "operation_schemas": ["inspect-failed-checks"],
+  "limit": 50,
+  "cursor": null
 }
 ```
 
-Output: skill metadata, operation cards, references, and either the full input
-and output schemas or an exact schema artifact reference for each operation ID
-named in `operation_schemas`. Each operation card includes its schema reference
-and digest. Full skill bodies remain deferred to `read`. Schemas for unselected
-operations are never returned. Unknown operation IDs fail explicitly, and the
-selector count and response size are bounded.
+Output: one deterministic page of skill metadata, operation cards, and
+reference metadata, plus either the full input and output schemas or an exact
+schema artifact reference for each operation ID named in `operation_schemas`.
+Page items are ordered by section and stable ID. The response includes total
+counts and an opaque `next_cursor`; `limit` has a finite maximum. The cursor is
+bound to the capability version and digest plus the requested `include` set, so
+a changed capability or structure selector returns an explicit stale-cursor
+error instead of mixing snapshots. `operation_schemas` is an independent exact
+selector and may be supplied on any page; selected schema content counts toward
+that response's size bound but does not change the structure cursor. Individual
+metadata entries are subject to package validation limits.
+
+Each operation card includes its schema reference and digest. Full skill bodies
+remain deferred to `read`. Schemas for unselected operations are never returned.
+Unknown operation IDs fail explicitly, and the schema selector count and total
+response size are bounded independently of structure pagination.
 
 ### `capscope.read`
 
@@ -681,8 +718,10 @@ Input:
 
 Output: the provider's native MCP content blocks, structured content, and
 `isError` at the outer `CallToolResult` level when inline, with CapScope metadata
-under `_meta.capscope`. An oversized accepted result returns the spill metadata
-and result reference defined in section 6.5.1 without partial provider content.
+under `_meta["io.capscope.proxy"].invocation` and the complete original provider
+metadata under `downstream_meta`. An oversized accepted result returns the spill
+metadata and result reference defined in section 6.5.1 without partial provider
+content.
 
 The first implementation may use fewer meta-tools if one union schema proves materially cheaper without harming validation. Benchmark the interface rather than assuming that the smallest tool count is automatically best.
 

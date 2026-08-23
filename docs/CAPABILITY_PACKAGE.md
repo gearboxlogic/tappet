@@ -286,7 +286,7 @@ A normalized card may look like:
   "tags": ["github", "ci", "actions"],
   "counts": {
     "skills": 1,
-    "operations": 1,
+    "operations": 2,
     "references": 2
   }
 }
