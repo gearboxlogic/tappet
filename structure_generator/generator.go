@@ -183,6 +183,9 @@ func validateGeneratedComponent(kind, name string) error {
 		filepath.VolumeName(name) != "" || strings.ContainsAny(name, `/\\`) || strings.ContainsRune(name, 0) {
 		return fmt.Errorf("invalid %s name for generated path: %q", kind, name)
 	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return fmt.Errorf("invalid %s name for generated path: trailing periods and spaces are not portable: %q", kind, name)
+	}
 	return nil
 }
 

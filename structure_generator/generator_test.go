@@ -154,6 +154,20 @@ func TestGenerateStructureRejectsProviderDerivedPathComponents(t *testing.T) {
 				Tools:      []Tool{{Name: `..\config`}},
 			}},
 		},
+		{
+			name: "Win32 trailing period provider alias",
+			servers: []ServerTools{
+				{ServerName: "foo"},
+				{ServerName: "foo."},
+			},
+		},
+		{
+			name: "Win32 trailing space provider alias",
+			servers: []ServerTools{
+				{ServerName: "foo"},
+				{ServerName: "foo "},
+			},
+		},
 	}
 
 	for _, testCase := range testCases {
