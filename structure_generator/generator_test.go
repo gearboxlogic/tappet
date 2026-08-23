@@ -172,6 +172,63 @@ func TestGenerateStructureRejectsProviderDerivedPathComponents(t *testing.T) {
 	}
 }
 
+func TestGenerateStructureRejectsCaseFoldingNameCollisions(t *testing.T) {
+	testCases := []struct {
+		name        string
+		servers     []ServerTools
+		errorSubstr string
+	}{
+		{
+			name: "provider names",
+			servers: []ServerTools{
+				{ServerName: "Alpha"},
+				{ServerName: "alpha"},
+			},
+			errorSubstr: "case-folding collision",
+		},
+		{
+			name:        "reserved root name",
+			servers:     []ServerTools{{ServerName: "ROOT.JSON"}},
+			errorSubstr: "reserved for the hierarchy root",
+		},
+		{
+			name: "tool names",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "Read"}, {Name: "read"}},
+			}},
+			errorSubstr: "case-folding collision",
+		},
+		{
+			name: "tool and provider index",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "ALPHA"}},
+			}},
+			errorSubstr: "case-folding collision with the provider index",
+		},
+		{
+			name: "unicode simple fold",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "K"}, {Name: "\u212a"}},
+			}},
+			errorSubstr: "case-folding collision",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			outputDir := filepath.Join(t.TempDir(), "hierarchy")
+			err := GenerateStructure(testCase.servers, outputDir)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), testCase.errorSubstr)
+			_, statErr := os.Stat(outputDir)
+			assert.ErrorIs(t, statErr, os.ErrNotExist)
+		})
+	}
+}
+
 func TestGeneratedPathRejectsStagingEscape(t *testing.T) {
 	_, err := generatedPath(t.TempDir(), "..", "outside.json")
 	require.Error(t, err)

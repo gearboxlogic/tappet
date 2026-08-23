@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // GenerateStructure creates a two-layer folder structure from MCP server tools
@@ -126,33 +127,64 @@ func validateExistingHierarchyDirectory(outputDir string) error {
 
 func validateGeneratedNames(servers []ServerTools) error {
 	serverNames := make(map[string]struct{}, len(servers))
+	foldedServerNames := make(map[string]string, len(servers))
+	rootNameKey := foldGeneratedName("root.json")
 	for _, server := range servers {
 		if err := validateGeneratedComponent("provider", server.ServerName); err != nil {
 			return err
 		}
-		if server.ServerName == "root.json" {
+		serverNameKey := foldGeneratedName(server.ServerName)
+		if serverNameKey == rootNameKey {
 			return errors.New("provider name is reserved for the hierarchy root: root.json")
 		}
 		if _, exists := serverNames[server.ServerName]; exists {
 			return fmt.Errorf("duplicate provider name: %s", server.ServerName)
 		}
+		if existing, exists := foldedServerNames[serverNameKey]; exists {
+			return fmt.Errorf("provider name %q has a case-folding collision with %q", server.ServerName, existing)
+		}
 		serverNames[server.ServerName] = struct{}{}
+		foldedServerNames[serverNameKey] = server.ServerName
 
 		toolNames := make(map[string]struct{}, len(server.Tools))
+		foldedToolNames := make(map[string]string, len(server.Tools))
 		for _, tool := range server.Tools {
 			if err := validateGeneratedComponent("tool", tool.Name); err != nil {
 				return fmt.Errorf("provider %s: %w", server.ServerName, err)
 			}
+			toolNameKey := foldGeneratedName(tool.Name)
 			if tool.Name == server.ServerName {
 				return fmt.Errorf("provider %s: tool name collides with provider index: %s", server.ServerName, tool.Name)
+			}
+			if toolNameKey == serverNameKey {
+				return fmt.Errorf("provider %s: tool name %q has a case-folding collision with the provider index", server.ServerName, tool.Name)
 			}
 			if _, exists := toolNames[tool.Name]; exists {
 				return fmt.Errorf("provider %s: duplicate tool name: %s", server.ServerName, tool.Name)
 			}
+			if existing, exists := foldedToolNames[toolNameKey]; exists {
+				return fmt.Errorf("provider %s: tool name %q has a case-folding collision with %q", server.ServerName, tool.Name, existing)
+			}
 			toolNames[tool.Name] = struct{}{}
+			foldedToolNames[toolNameKey] = tool.Name
 		}
 	}
 	return nil
+}
+
+func foldGeneratedName(name string) string {
+	var folded strings.Builder
+	folded.Grow(len(name))
+	for _, current := range name {
+		canonical := current
+		for candidate := unicode.SimpleFold(current); candidate != current; candidate = unicode.SimpleFold(candidate) {
+			if candidate < canonical {
+				canonical = candidate
+			}
+		}
+		folded.WriteRune(canonical)
+	}
+	return folded.String()
 }
 
 func validateGeneratedComponent(kind, name string) error {
