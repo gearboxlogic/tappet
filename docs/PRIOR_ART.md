@@ -2,7 +2,7 @@
 
 Status: **research record, not an endorsement of every project design**
 
-Research date: **2026-08-19**
+Research date: **2026-08-23**
 
 This document records source-backed mechanisms that CapScope can reuse or learn from. Links point to authoritative project repositories, specifications, or tracked source behavior.
 
@@ -336,13 +336,29 @@ It is a credible fallback and comparison target, but switching SDKs would touch 
 
 ## 12. Client behavior and dynamic tool lists
 
-Evidence from current client issue trackers and provider documentation shows that live tool-list refresh is not consistently handled.
+Evidence from client issue trackers and provider documentation shows that live
+tool-list refresh is not consistently handled across clients, versions, modes,
+and transports. These are compatibility reports, not claims about every build:
 
-Examples include open or closed reports in:
-
-- OpenAI Codex
-- Claude Code
-- provider compatibility guidance from IONOS
+- OpenAI Codex issue
+  [#33266](https://github.com/openai/codex/issues/33266) reports that Codex
+  CLI/core `0.144.1` over stdio did not refetch `tools/list` after
+  `notifications/tools/list_changed`. The issue was open when inspected on
+  2026-08-23.
+- OpenAI Codex issue
+  [#35583](https://github.com/openai/codex/issues/35583) reports the same failure
+  in Microsoft Store desktop build `26.721.4979.0`, with Codex CLI `0.145.0`,
+  on Windows 11 over stdio. The issue was open when inspected on 2026-08-23.
+- Claude Code issue
+  [#62844](https://github.com/anthropics/claude-code/issues/62844) reports that
+  Claude Code `2.1.152` did not refresh tools in a persistent headless
+  `--print` stream-JSON process. The issue was closed by stale automation on
+  2026-08-12 without a documented fix; comments also reported interactive and
+  stdio failures, so closure is not evidence of compatibility.
+- The IONOS Cloud MCP
+  [tool-loading documentation](https://github.com/ionos-cloud/ionoscloud-mcp/blob/89b804b70eb19dc300a251f3d7679c2389916760/README.md#tool-loading-mode)
+  names clients that ignore `notifications/tools/list_changed` and provides a
+  fixed three-tool dynamic mode that does not require refresh support.
 
 Therefore:
 

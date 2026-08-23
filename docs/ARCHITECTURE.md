@@ -2,7 +2,7 @@
 
 Status: **accepted direction; interfaces remain V1-alpha proposals**
 
-Last researched: **2026-08-19**
+Last researched: **2026-08-23**
 
 ## 1. Problem
 
@@ -168,8 +168,8 @@ Exact names and schemas remain alpha until tested.
 Suggested responsibilities:
 
 - `search`: natural-language and exact-ID search, optionally constrained by hierarchy path
-- `describe`: return one capability's compact structure and selected operation schemas
-- `read`: return one skill body or referenced resource
+- `describe`: return one capability's compact structure and explicitly selected operation schemas
+- `read`: return one skill body, referenced resource, or bounded chunk of a spilled invocation result
 - `invoke`: execute one operation with typed arguments through its provider
 
 Broker mode does not depend on `tools/list_changed`.
@@ -299,6 +299,55 @@ It should:
 - avoid embedding a complete downstream catalog into its own tool descriptions
 - remain usable by clients that ignore live tool-list changes
 
+#### 6.5.1 Bounded invocation results
+
+The broker must never silently truncate or flatten a provider result. If the
+complete typed result fits the configured inline limit, `invoke` returns it
+inline. Otherwise CapScope stores a lossless encoding of the complete typed
+result in a temporary spill object. The two envelope forms are:
+
+```json
+{
+  "invocation_id": "invocation:opaque-id",
+  "disposition": "inline",
+  "provider_is_error": false,
+  "result": {
+    "content": [],
+    "structuredContent": {},
+    "isError": false
+  }
+}
+```
+
+```json
+{
+  "invocation_id": "invocation:opaque-id",
+  "disposition": "spilled",
+  "provider_is_error": false,
+  "result_ref": "result:opaque-handle",
+  "media_type": "application/json",
+  "chunk_encoding": "base64",
+  "stored_bytes": 1048576,
+  "sha256": "hex-digest",
+  "expires_at": "RFC3339 timestamp"
+}
+```
+
+The result reference is an opaque, process-local application handle. A caller
+retrieves it through bounded `read` calls using an offset and maximum byte
+count. Each response reports the next offset and whether the result is
+complete. The stored representation is UTF-8 JSON for the complete typed MCP
+result; each byte range is base64 encoded so chunks cannot corrupt text or
+binary content. Reassembly preserves structured MCP content and result types.
+The outer `capscope.invoke` result preserves the provider's `isError` value, and
+`provider_is_error` repeats that classification in the envelope when the typed
+result is spilled. If spill storage fails, `invoke` returns an explicit
+bounded-output error instead of a partial result.
+
+Spill objects expire after a configured interval and are removed at shutdown.
+Their handles must be unguessable and excluded from logs. They are not MCP
+protocol sessions and must not carry hidden capability activation state.
+
 ### 6.6 Provider manager
 
 The provider manager adapts downstream MCP servers.
@@ -401,6 +450,7 @@ Derived state must be rebuildable.
 - transient search results
 - harness-native active projections
 - temporary output spill files
+- explicit handles for temporary spilled results
 
 ### 7.4 Explicit application handles
 
@@ -408,7 +458,10 @@ MCP 2026-07-28 removes protocol-level sessions. If CapScope later introduces a c
 
 Do not map an implicit client connection to hidden capability state.
 
-The first broker-mode vertical slice should remain stateless across CapScope calls except for provider and cache lifecycle. Introduce explicit activation handles only after a tested requirement demonstrates their value.
+The first broker-mode vertical slice should remain stateless across CapScope
+calls except for provider lifecycle, cache lifecycle, and bounded temporary
+result retrieval through explicit result handles. Introduce activation handles
+only after a tested requirement demonstrates their value.
 
 ## 8. Authorization boundary
 
@@ -423,6 +476,21 @@ provider permission
 CapScope may support an optional external filter hook that removes unavailable capabilities from a projection, but the hook is an integration point, not a policy engine.
 
 Every invocation still reaches the provider's normal authorization boundary. CapScope must propagate permission failures accurately.
+
+### 8.1 Broker transport access
+
+The inherited HTTP entrypoint optionally wraps the entire MCP endpoint with
+`internal/server.newAuthMiddleware`, using static bearer tokens from
+`mcpProxy.options.authTokens`. This is a transport access gate retained for
+baseline compatibility. It does not identify a user, grant access to a
+capability or operation, authorize a downstream action, or replace provider
+authentication.
+
+The catalog, resolver, materializer, and provider interfaces must remain
+independent of this middleware. Provider credentials stay in external provider
+configuration. Removing or replacing the gate requires a separate compatibility
+decision, tests for existing HTTP deployments, and migration guidance. CapScope
+does not grow this middleware into an IAM or policy subsystem.
 
 ## 9. Latest MCP strategy
 
@@ -485,11 +553,16 @@ Input:
 ```json
 {
   "capability_id": "software.github.ci-debugging",
-  "include": ["skills", "operations"]
+  "include": ["skills", "operations"],
+  "operation_schemas": ["inspect-failed-checks"]
 }
 ```
 
-Output: skill metadata, operation cards, and references. Full skill bodies and full operation schemas remain deferred unless explicitly requested.
+Output: skill metadata, operation cards, references, and the full input and
+output schemas plus schema digest for each exact operation ID named in
+`operation_schemas`. Full skill bodies remain deferred to `read`. Schemas for
+unselected operations are never returned. Unknown operation IDs fail
+explicitly, and the selector count and response size are bounded.
 
 ### `capscope.read`
 
@@ -503,6 +576,37 @@ Input:
 ```
 
 Output: one skill body or one permitted reference resource.
+
+For an oversized invocation result, the same tool accepts a result reference:
+
+```json
+{
+  "ref": "result:opaque-handle",
+  "offset": 0,
+  "max_bytes": 65536
+}
+```
+
+Output:
+
+```json
+{
+  "ref": "result:opaque-handle",
+  "offset": 0,
+  "data_base64": "encoded byte range",
+  "next_offset": 65536,
+  "complete": false,
+  "media_type": "application/json",
+  "stored_bytes": 1048576,
+  "sha256": "hex-digest",
+  "expires_at": "RFC3339 timestamp"
+}
+```
+
+Reassembling the decoded byte ranges yields the complete typed provider result
+represented by the spill object. The digest verifies the reassembled value.
+`offset`, `next_offset`, `max_bytes`, and `stored_bytes` count decoded bytes in
+the stored UTF-8 JSON representation, not base64 characters.
 
 ### `capscope.invoke`
 
@@ -518,7 +622,9 @@ Input:
 }
 ```
 
-Output: the provider's structured result plus CapScope invocation metadata.
+Output: an envelope containing CapScope invocation metadata and either the
+complete structured provider result inline or the spill metadata and result
+reference defined in section 6.5.1.
 
 The first implementation may use fewer meta-tools if one union schema proves materially cheaper without harming validation. Benchmark the interface rather than assuming that the smallest tool count is automatically best.
 
@@ -559,6 +665,7 @@ Correctness:
 - operation arguments are validated against the current provider schema
 - provider authorization failures remain intact
 - structured results survive proxying
+- oversized structured results can be retrieved completely without silent truncation
 - provider processes start and stop predictably
 
 Efficiency:
@@ -590,7 +697,6 @@ Operational:
 - Four fixed broker tools versus a single union-style broker tool
 - In-memory lexical index versus SQLite FTS5 at expected catalog sizes
 - Whether hierarchy is explicit manifest data, a derived path, or both
-- How much operation schema detail belongs in `describe`
 - How clients preserve structured output through a generic broker
 - How modern MCP list caching should interact with the internal catalog cache
 - Whether explicit activation handles provide enough value to justify state
