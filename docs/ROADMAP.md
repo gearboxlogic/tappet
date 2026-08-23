@@ -71,6 +71,8 @@ Exit criteria:
 
 - at least three hand-reviewed packages load
 - duplicate and invalid references fail deterministically
+- FIFOs, devices, sockets, directories, and other non-regular package artifacts
+  fail without blocking or reading from them
 - no provider credentials appear in packages
 - current tool mappings can be represented without loss
 
@@ -123,6 +125,7 @@ Work:
 - cache priming during capability installation and explicit operator refresh
 - exact operation-schema selectors in `describe`
 - bounded chunk retrieval for cached schemas
+- atomic paginated metadata ingestion with exact duplicate-name rejection
 - lazy start
 - idle shutdown
 - reconnect and failure backoff
@@ -135,7 +138,7 @@ Work:
   connection negotiated reliable tool-list change notifications
 - self-contained schema-reference policy with bounded, cancellation-aware
   compilation and argument validation
-- bounded inline output plus quota-limited lossless spill and chunked retrieval
+- bounded inline output plus quota-limited lossless spill and leased chunked retrieval
 - lifecycle status and telemetry
 
 Exit criteria:
@@ -148,9 +151,15 @@ Exit criteria:
 - idle provider stops and reconnects on next invoke
 - reconnect refreshes schemas before invoke and stale arguments never reach the provider
 - an ambiguously delivered provider call is never replayed automatically
+- post-call spill failures report the completed provider outcome and remain
+  explicitly unsafe to retry
 - large output cannot silently consume unbounded model context or lose structured content
 - spill limits fail explicitly without exceeding per-result or aggregate quotas
+- an accepted spill remains completely retrievable through a bounded active
+  continuation lease even when its original start-by deadline passes
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
+- duplicate provider tool names across one metadata refresh reject the snapshot
+  before map insertion or schema selection
 - external schema references and over-budget schema compilation or validation
   fail without network access or provider invocation
 
