@@ -149,6 +149,15 @@ may change only through an explicit format revision and benchmark update.
 
 `spec.parent` defines an optional parent capability path for browsing.
 
+When present, the parent must be a proper dot-delimited prefix of
+`metadata.id`: it cannot equal the capability ID or point sideways or downward.
+For example, `software.github` is a valid parent of
+`software.github.ci-debugging`; `software.github.ci-debugging` and
+`software.gitlab` are not. An omitted parent attaches the capability directly
+to the hierarchy root. This local rule makes self-parenting and multi-package
+parent cycles impossible without requiring traversal of a partially installed
+graph.
+
 Hierarchy is organizational and should not imply inheritance of skills, tools, context, or permissions in V1.
 
 A future package composition feature requires a separate decision. Do not silently merge parent content into children.
@@ -247,13 +256,24 @@ V1 rules:
 
 ### Package path containment
 
-CapScope resolves the configured package root to a canonical absolute path
-once, then cleans every package-relative path and checks each component with
-`lstat`. V1 rejects any symlink component or symlink target rather than
-following it. The final absolute path must remain beneath the canonical package
-root. Reads must use no-follow filesystem operations where available, or reopen
-and revalidate canonical containment, so a path cannot be swapped to an
-external target between validation and use.
+CapScope resolves the configured package root to a canonical absolute path and
+opens a directory handle for that root. Every package-relative component is
+then opened relative to the preceding directory handle with no-follow and
+beneath-root semantics. On Linux this means `openat2` with
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` where available, or a
+component-by-component `openat` walk using directory descriptors and
+`O_NOFOLLOW`; other
+platforms must provide equivalent descriptor-relative, reparse-point-safe
+operations. The loader rejects `..`, absolute paths, symlink or reparse-point
+components, and non-directory intermediate components.
+
+Validation, digesting, and content reads use the same opened file descriptor;
+CapScope never validates a pathname and later reopens that pathname for use. A
+platform or filesystem adapter that cannot provide equivalent race-safe
+primitives is unsupported for local package reads and must reject package
+installation or access explicitly. Reopening and revalidating a canonical path
+is not an accepted fallback because another writer can swap a component between
+those operations.
 
 MCP resources may be added as a context source after the local-file vertical slice.
 
@@ -304,6 +324,40 @@ requestTimeout: 30s
 
 A capability may eventually request compatibility requirements, but should not silently override operator lifecycle policy.
 
+### V1-alpha structure metadata limits
+
+The loader applies the following limits before registering a package. Byte
+limits are normalized UTF-8 bytes; item and aggregate limits use the canonical
+encoded JSON representation. These limits cover material returned by
+`describe`, independently of the smaller discovery-card limits above.
+
+| Structure | Limit |
+| --- | ---: |
+| encoded `capscope.yaml` input | 1 MiB |
+| skills | 32 entries |
+| operations | 128 entries |
+| context references | 128 entries |
+| providers | 32 entries |
+| skill path | 512 bytes |
+| indexed skill name | 128 bytes |
+| indexed skill description | 1,024 bytes |
+| operation ID | 128 bytes |
+| operation description | 1,024 bytes |
+| operation provider alias | 128 bytes |
+| operation target | 256 bytes |
+| context reference ID | 128 bytes |
+| context path | 512 bytes |
+| provider ID | 128 bytes |
+| provider type | 32 bytes |
+| provider `serverRef` | 256 bytes |
+| one normalized structure item | 4,096 encoded JSON bytes |
+| all normalized structure metadata | 512 KiB encoded JSON |
+
+Invalid UTF-8 or any exceeded field, item, count, manifest, or aggregate limit
+rejects the package; CapScope never truncates a structure entry. Referenced
+artifact bodies and provider-owned schemas have their own bounded-ingestion
+limits because they are not structure metadata.
+
 ## 10. Derived capability card
 
 A normalized card may look like:
@@ -335,15 +389,25 @@ Reject packages with:
 
 - duplicate capability IDs
 - invalid version or identifier syntax
+- a parent that is not a proper dot-delimited prefix of the capability ID
 - missing or escaping paths
 - symlinked package content or paths that fail canonical containment
 - invalid Agent Skills metadata
+- duplicate normalized skill paths
 - duplicate operation IDs
+- duplicate context reference IDs or normalized context paths
 - unknown provider references
 - duplicate provider aliases
 - provider targets absent from a refreshed metadata snapshot when strict validation is requested
 - unbounded or unsupported referenced files
-- discovery metadata that exceeds a per-field, count, or aggregate card limit
+- discovery or structure metadata that exceeds a per-field, item, count,
+  manifest, or aggregate limit
+
+Every manifest collection addressed by `id` must be unique within its artifact
+kind. V1 therefore validates operation IDs, context reference IDs, and provider
+aliases before constructing artifact references. The explicit reference-kind
+prefix keeps those three namespaces separate. Collections addressed by path,
+including skills, reject duplicate normalized paths.
 
 Warnings may be appropriate when a provider is offline and strict target validation cannot run.
 

@@ -210,11 +210,15 @@ CapScope should not depend on live tool-list changes for V1.
 
 Source:
 
-- https://github.com/CrowdStrike/falcon-mcp
+- https://github.com/CrowdStrike/falcon-mcp/blob/c7e1db203f2e48099a7d7d9afa7b3af9b01998ea/falcon_mcp/server.py
+- https://github.com/CrowdStrike/falcon-mcp/blob/c7e1db203f2e48099a7d7d9afa7b3af9b01998ea/README.md
+- inspected revision `c7e1db203f2e48099a7d7d9afa7b3af9b01998ea`
+  (`falcon_mcp/server.py` and `README.md`, 2026-08-22 release 0.17.0)
 
 Useful mechanism:
 
-- fixed list/search/execute dispatcher for large catalogs
+- dynamic mode's fixed `falcon_list_enabled_tools`, `falcon_search_tools`, and
+  `falcon_execute_tool` dispatcher for large catalogs
 
 This independently validates the stable dispatcher pattern. It does not add a skill or capability package model.
 

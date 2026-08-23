@@ -399,6 +399,38 @@ deployment must use a shared bounded spill store addressable by result reference
 or explicitly disable spill retrieval; process-local handles alone are not a
 stateless horizontal-scaling design.
 
+#### 6.5.2 Bounded broker requests
+
+Broker inputs are bounded before JSON decoding. V1 accepts at most 1 MiB of
+encoded JSON-RPC request data per message. HTTP rejects an oversized declared
+body and applies a limited reader to chunked or undeclared bodies. Stdio and
+other framed transports stop reading and reject a message once the frame limit
+is reached; they must not accumulate an unbounded line or frame first. A
+transport or SDK integration that cannot enforce this pre-decode boundary is
+not supported on an untrusted broker endpoint.
+
+After bounded decoding, V1 applies these tool-input limits before dispatch:
+
+| Input | Limit |
+| --- | ---: |
+| JSON nesting depth | 64 |
+| `query` | 4,096 normalized UTF-8 bytes |
+| capability or operation ID | 128 bytes |
+| hierarchy `path` | 256 bytes |
+| cursor or artifact `ref` | 2,048 bytes |
+| `include` values | 8 entries, 64 bytes each |
+| `operation_schemas` | 32 exact IDs |
+| `limit` | 100 items |
+| `max_bytes` requested from `read` | 64 KiB decoded |
+| normalized `invoke.arguments` | 256 KiB encoded JSON |
+
+Invalid UTF-8, excess nesting, or an exceeded field, collection, or aggregate
+limit returns a typed bounded-request error before registry lookup, cache
+access, provider startup, or spill allocation. The outer 1 MiB limit remains
+authoritative even when individual fields are below their limits. Deployments
+may set smaller limits, but changing these V1-alpha maxima requires an explicit
+architecture and benchmark update.
+
 ### 6.6 Provider manager
 
 The provider manager adapts downstream MCP servers.
@@ -690,11 +722,17 @@ Input:
 ```json
 {
   "capability_id": "software.github.ci-debugging",
-  "ref": "operation:inspect-failed-checks/schema",
+  "ref": "schema:v1:provider-fingerprint:schema-digest:inspect-failed-checks",
   "offset": 0,
   "max_bytes": 65536
 }
 ```
+
+The `ref` above is illustrative but not mutable: callers copy the exact opaque
+schema reference returned by `describe`. Its encoded identity binds the
+operation ID, provider configuration fingerprint, and schema digest. `read`
+must return a typed stale-reference error if any binding no longer matches; it
+must never resolve the token to whichever schema is current at read time.
 
 Output: one operation schema, skill body, permitted reference resource, or
 bounded chunk of one of those artifacts. A complete artifact is returned inline
