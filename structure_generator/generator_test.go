@@ -215,6 +215,14 @@ func TestGenerateStructureRejectsCaseFoldingNameCollisions(t *testing.T) {
 			}},
 			errorSubstr: "case-folding collision",
 		},
+		{
+			name: "unicode canonical normalization",
+			servers: []ServerTools{{
+				ServerName: "alpha",
+				Tools:      []Tool{{Name: "é"}, {Name: "e\u0301"}},
+			}},
+			errorSubstr: "case-folding collision",
+		},
 	}
 
 	for _, testCase := range testCases {

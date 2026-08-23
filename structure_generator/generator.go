@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // GenerateStructure creates a two-layer folder structure from MCP server tools
@@ -173,18 +175,7 @@ func validateGeneratedNames(servers []ServerTools) error {
 }
 
 func foldGeneratedName(name string) string {
-	var folded strings.Builder
-	folded.Grow(len(name))
-	for _, current := range name {
-		canonical := current
-		for candidate := unicode.SimpleFold(current); candidate != current; candidate = unicode.SimpleFold(candidate) {
-			if candidate < canonical {
-				canonical = candidate
-			}
-		}
-		folded.WriteRune(canonical)
-	}
-	return folded.String()
+	return norm.NFC.String(cases.Fold().String(norm.NFC.String(name)))
 }
 
 func validateGeneratedComponent(kind, name string) error {
