@@ -355,7 +355,7 @@ func exceedsInventoryLimit(current, additional, limit int) bool {
 }
 
 func newCatalogConnection(name string, providerConfig *config.MCPClientConfigV2) (catalogConnection, error) {
-	mcpClient, err := client.NewMCPClient(name, providerConfig)
+	mcpClient, err := client.NewMCPClientWithResponseLimit(name, providerConfig, maxInventoryPageBytes)
 	if err != nil {
 		return catalogConnection{}, err
 	}

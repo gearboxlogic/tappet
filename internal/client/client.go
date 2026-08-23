@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/gearboxlogic/capscope/internal/config"
@@ -23,6 +24,19 @@ type Client struct {
 }
 
 func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) {
+	return newMCPClient(name, conf, 0)
+}
+
+// NewMCPClientWithResponseLimit creates a client whose transport rejects
+// downstream response frames larger than maxResponseBytes before JSON decoding.
+func NewMCPClientWithResponseLimit(name string, conf *config.MCPClientConfigV2, maxResponseBytes int64) (*Client, error) {
+	if maxResponseBytes <= 0 {
+		return nil, errors.New("maximum response bytes must be positive")
+	}
+	return newMCPClient(name, conf, maxResponseBytes)
+}
+
+func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes int64) (*Client, error) {
 	clientInfo, err := config.ParseMCPClientConfigV2(conf)
 	if err != nil {
 		return nil, err
@@ -33,6 +47,14 @@ func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) 
 		for key, val := range value.Env {
 			envs = append(envs, fmt.Sprintf("%s=%s", key, val))
 		}
+		if maxResponseBytes > 0 {
+			stdioTransport := newLimitedStdioTransport(value.Command, envs, value.Args, maxResponseBytes)
+			return &Client{
+				name:            name,
+				needManualStart: true,
+				client:          client.NewClient(stdioTransport),
+			}, nil
+		}
 		mcpClient, err := client.NewStdioMCPClient(value.Command, envs, value.Args...)
 		if err != nil {
 			return nil, err
@@ -41,6 +63,9 @@ func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) 
 
 	case *config.SSEMCPClientConfig:
 		var options []transport.ClientOption
+		if maxResponseBytes > 0 {
+			options = append(options, client.WithHTTPClient(newResponseLimitedHTTPClient(http.DefaultTransport, 0, maxResponseBytes)))
+		}
 		if len(value.Headers) > 0 {
 			options = append(options, client.WithHeaders(value.Headers))
 		}
@@ -57,10 +82,13 @@ func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) 
 
 	case *config.StreamableMCPClientConfig:
 		var options []transport.StreamableHTTPCOption
+		if maxResponseBytes > 0 {
+			options = append(options, transport.WithHTTPBasicClient(newResponseLimitedHTTPClient(http.DefaultTransport, value.Timeout, maxResponseBytes)))
+		}
 		if len(value.Headers) > 0 {
 			options = append(options, transport.WithHTTPHeaders(value.Headers))
 		}
-		if value.Timeout > 0 {
+		if value.Timeout > 0 && maxResponseBytes == 0 {
 			options = append(options, transport.WithHTTPTimeout(value.Timeout))
 		}
 		mcpClient, err := client.NewStreamableHttpClient(value.URL, options...)
