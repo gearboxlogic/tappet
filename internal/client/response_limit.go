@@ -325,22 +325,41 @@ func (t *limitedStdioTransport) SendRequest(ctx context.Context, request transpo
 
 	requestCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	type response struct {
-		value *transport.JSONRPCResponse
-		err   error
-	}
-	responseCh := make(chan response, 1)
+	responseCh := make(chan limitedStdioResponse, 1)
 	go func() {
 		value, err := inner.SendRequest(requestCtx, request)
-		responseCh <- response{value: value, err: err}
+		responseCh <- limitedStdioResponse{value: value, err: err}
 	}()
 
+	return awaitLimitedStdioResponse(ctx, t.limitCh, responseCh)
+}
+
+type limitedStdioResponse struct {
+	value *transport.JSONRPCResponse
+	err   error
+}
+
+func awaitLimitedStdioResponse(
+	ctx context.Context,
+	limitCh <-chan struct{},
+	responseCh <-chan limitedStdioResponse,
+) (*transport.JSONRPCResponse, error) {
 	select {
-	case <-t.limitCh:
+	case <-limitCh:
 		return nil, ErrResponseLimitExceeded
 	case result := <-responseCh:
+		select {
+		case <-limitCh:
+			return nil, ErrResponseLimitExceeded
+		default:
+		}
 		return result.value, result.err
 	case <-ctx.Done():
+		select {
+		case <-limitCh:
+			return nil, ErrResponseLimitExceeded
+		default:
+		}
 		return nil, ctx.Err()
 	}
 }

@@ -216,6 +216,19 @@ func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {
 	require.ErrorIs(t, err, ErrResponseLimitExceeded)
 }
 
+func TestAwaitLimitedStdioResponsePrefersLimitSignal(t *testing.T) {
+	for range 100 {
+		limitCh := make(chan struct{})
+		responseCh := make(chan limitedStdioResponse, 1)
+		responseCh <- limitedStdioResponse{err: io.EOF}
+		close(limitCh)
+
+		response, err := awaitLimitedStdioResponse(context.Background(), limitCh, responseCh)
+		assert.Nil(t, response)
+		require.ErrorIs(t, err, ErrResponseLimitExceeded)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
