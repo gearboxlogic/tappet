@@ -23,6 +23,11 @@ type Client struct {
 	client          *client.Client
 }
 
+const (
+	providerPingInterval = 30 * time.Second
+	providerPingTimeout  = 10 * time.Second
+)
+
 func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) {
 	return newMCPClient(name, conf, 0)
 }
@@ -123,7 +128,11 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 }
 
 func (c *Client) startPingTask(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	c.runPingTask(ctx, providerPingInterval, providerPingTimeout, c.client.Ping)
+}
+
+func (c *Client) runPingTask(ctx context.Context, interval, timeout time.Duration, ping func(context.Context) error) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	failCount := 0
@@ -133,10 +142,14 @@ func (c *Client) startPingTask(ctx context.Context) {
 			log.Printf("<%s> Context done, stopping ping", c.name)
 			return
 		case <-ticker.C:
-			if err := c.client.Ping(ctx); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return
-				}
+			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := ping(pingCtx)
+			cancel()
+			if ctx.Err() != nil {
+				log.Printf("<%s> Context done, stopping ping", c.name)
+				return
+			}
+			if err != nil {
 				failCount++
 				log.Printf("<%s> MCP Ping failed: %v (count=%d)", c.name, err, failCount)
 			} else if failCount > 0 {
