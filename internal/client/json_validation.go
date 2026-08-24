@@ -13,12 +13,27 @@ import (
 // losslessly because an object contains the same decoded member name twice.
 var ErrDuplicateJSONMember = errors.New("duplicate JSON object member")
 
+var (
+	ErrJSONDepthExceeded = errors.New("provider message JSON depth exceeded")
+	ErrJSONNodesExceeded = errors.New("provider message JSON node count exceeded")
+)
+
+const (
+	maxProviderJSONDepth = 128
+	maxProviderJSONNodes = 1_048_576
+)
+
 // RejectDuplicateJSONMembers validates one complete JSON value before ordinary
 // struct or map decoding can collapse duplicate object members.
 func RejectDuplicateJSONMembers(data []byte) error {
+	return rejectJSONMembersWithLimits(data, maxProviderJSONDepth, maxProviderJSONNodes)
+}
+
+func rejectJSONMembersWithLimits(data []byte, maxDepth, maxNodes int) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if err := scanJSONValue(decoder); err != nil {
+	state := jsonScanState{maxDepth: maxDepth, maxNodes: maxNodes}
+	if err := scanJSONValue(decoder, &state, 1); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
@@ -30,14 +45,34 @@ func RejectDuplicateJSONMembers(data []byte) error {
 	return nil
 }
 
-func scanJSONValue(decoder *json.Decoder) error {
+type jsonScanState struct {
+	maxDepth int
+	maxNodes int
+	nodes    int
+}
+
+func (s *jsonScanState) addNode() error {
+	s.nodes++
+	if s.nodes > s.maxNodes {
+		return fmt.Errorf("%w: maximum %d", ErrJSONNodesExceeded, s.maxNodes)
+	}
+	return nil
+}
+
+func scanJSONValue(decoder *json.Decoder, state *jsonScanState, depth int) error {
 	token, err := decoder.Token()
 	if err != nil {
 		return err
 	}
 	delimiter, ok := token.(json.Delim)
 	if !ok {
-		return nil
+		return state.addNode()
+	}
+	if depth > state.maxDepth {
+		return fmt.Errorf("%w: maximum %d", ErrJSONDepthExceeded, state.maxDepth)
+	}
+	if err := state.addNode(); err != nil {
+		return err
 	}
 
 	switch delimiter {
@@ -52,17 +87,20 @@ func scanJSONValue(decoder *json.Decoder) error {
 			if !ok {
 				return errors.New("JSON object member name is not a string")
 			}
+			if err := state.addNode(); err != nil {
+				return err
+			}
 			if _, exists := members[key]; exists {
 				return fmt.Errorf("%w %q", ErrDuplicateJSONMember, key)
 			}
 			members[key] = struct{}{}
-			if err := scanJSONValue(decoder); err != nil {
+			if err := scanJSONValue(decoder, state, depth+1); err != nil {
 				return err
 			}
 		}
 	case '[':
 		for decoder.More() {
-			if err := scanJSONValue(decoder); err != nil {
+			if err := scanJSONValue(decoder, state, depth+1); err != nil {
 				return err
 			}
 		}
