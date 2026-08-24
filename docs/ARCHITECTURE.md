@@ -522,9 +522,10 @@ fits the broker response limit, Tappet forwards its numeric `code`, `message`,
 and structured `data` unchanged. When it exceeds the inline limit but fits the
 accepted downstream frame and spill limits, Tappet stores a lossless encoding
 of those three original fields in an error spill. The bounded outward JSON-RPC
-error retains the original numeric code, uses the fixed message
+error uses the broker-owned server-error code `-32099` and the fixed message
 `Downstream error payload spilled`, and puts only this broker envelope in
-`data`:
+`data`. The exact original numeric code is retained inside the spill rather than
+copied into the bounded outer response:
 
 ```json
 {
@@ -541,7 +542,9 @@ error retains the original numeric code, uses the fixed message
 
 `tappet.read` retrieves that error reference in bounded chunks; reassembly
 restores the exact original code, message, and data. The outer envelope never
-copies a partial provider `data` value or truncates the provider message.
+copies the provider code, a partial provider `data` value, or a truncated
+provider message. The fixed outer code remains bounded even when the accepted
+provider code has an unusually long numeric lexeme.
 Before transmitting any invocation byte, admission reserves one terminal-error
 object, its potential retrieval lease, and enough bytes for the maximum accepted
 downstream JSON-RPC error. If that reservation is unavailable, invocation fails
@@ -662,6 +665,7 @@ decoding, V1 applies the remaining tool-input limits before dispatch:
 | --- | ---: |
 | JSON nesting depth | 64 |
 | JSON syntax nodes | 131,072 |
+| encoded outer JSON-RPC `id` token | 256 bytes |
 | `query` | 4,096 normalized UTF-8 bytes |
 | capability or operation ID | 128 bytes |
 | hierarchy `path` | 256 bytes |
@@ -678,6 +682,10 @@ Invalid UTF-8 or syntax returns `broker_message_invalid`; excess nesting returns
 `broker_message_node_limit_exceeded`. An exceeded field, collection, or
 aggregate limit returns its typed bounded-request error. Each failure occurs
 before registry lookup, cache access, provider startup, or spill allocation.
+The ID limit applies to string and numeric IDs using their exact encoded token.
+An over-limit ID returns a bounded invalid-request response with `id: null` and
+cannot reach dispatch; Tappet never executes a request whose ID cannot fit in
+the smallest terminal response.
 The outer 1 MiB limit remains authoritative even when individual fields are
 below their limits. Deployments may set smaller limits, but changing these
 V1-alpha maxima requires an explicit architecture and benchmark update.
@@ -817,7 +825,24 @@ maximum requires an architecture and benchmark update.
 The transport reserves global request-count and encoded-byte capacity before
 reading or retaining the full bounded frame. HTTP uses the declared length when
 valid and pessimistically reserves the 1 MiB message maximum otherwise; framed
-transports pause before consuming another frame when no ingress slot exists.
+transports pause ordinary request admission when no ordinary ingress slot
+exists, but continue reading through the bounded control lane below.
+
+V1-alpha reserves eight global control-decode slots and 8 MiB of encoded-byte
+capacity outside the ordinary request queues. A framed reader acquires one slot
+and pessimistically reserves the 1 MiB frame maximum before reading the next
+otherwise-blocked frame. Bounded tokenization identifies
+`notifications/cancelled` without constructing a general object graph. A valid
+cancellation is limited to 16 KiB encoded and runs synchronously in the control
+lane, where it removes the matching queued request or cancels the active request
+before the slot is released. An ordinary request encountered in this lane is
+rejected as overloaded and never queued or dispatched. Other notifications are
+either admitted to their ordinary bounded method queue or rejected without
+retention. Control slots are assigned fairly across connections, and one
+connection may hold at most one, so a saturated or hostile peer cannot prevent
+another connection from delivering cancellation. The lane has no provider
+startup, registry lookup, or tool execution path.
+
 Capacity reservation starts a non-renewable 30-second ingress deadline covering
 the complete body or frame read, bounded tokenization, and method admission;
 progress does not extend it. HTTP additionally sets a five-second connection
@@ -992,6 +1017,17 @@ constructs a method-specific object or starts a handler goroutine. Terminal
 responses route directly to the already bounded in-flight request set and do
 not create an independent unbounded queue.
 
+`notifications/tools/list_changed` has a synchronous invalidation step before
+ordinary event enqueueing. In provider-wire receive order, immediately after
+bounded pre-decode validation identifies that method, the reader acquires the
+metadata-selection fence and marks the active provider generation dirty. Only
+then may it reserve event-queue capacity and enqueue optional refresh or
+observer work. Invocation dispatch acquires the same fence, so it cannot select
+a supposedly clean schema while any earlier list-change frame is waiting for an
+asynchronous handler. If the notification cannot be queued afterward, normal
+event-overflow handling closes the connection; reconnect still refreshes
+metadata before invocation.
+
 The reader may exert transport backpressure only while reserved capacity exists;
 it never waits indefinitely for an event consumer while continuing to retain
 new frames. Failure to reserve event capacity closes the provider connection
@@ -1031,8 +1067,10 @@ accepted, even when configuration and package bindings are unchanged. On a
 long-lived connection, Tappet may reuse that invocation contract only when
 the provider advertised reliable tool-list change notifications on the active
 connection. The provider manager serializes notification handling with schema
-selection: a dirty notification before dispatch forces a bounded refresh and
-revalidation. Without that negotiated invalidation contract, Tappet performs
+selection: the wire reader marks metadata dirty synchronously before enqueueing
+any asynchronous list-change work, and a dirty generation before dispatch
+forces a bounded refresh and revalidation. Without that negotiated invalidation
+contract, Tappet performs
 a bounded metadata refresh immediately before every invocation, then validates
 arguments against that result. A provider that advertises notifications but
 changes schemas without sending them violates its negotiated contract; the
@@ -1388,10 +1426,12 @@ requests use the returned continuation reference and do not reuse the attempt
 ID.
 
 Output: one operation schema, skill body, permitted reference resource, or
-bounded chunk of one of those artifacts. A complete artifact is returned inline
-only when it fits the response limit. Larger accepted artifacts use the same
-`offset`, `max_bytes`, base64 chunk, byte-count, and digest fields shown below,
-with their stable artifact reference on the first request. If the first chunk
+bounded chunk of one of those artifacts. `max_bytes` always caps decoded
+artifact bytes returned by the call. A complete artifact is returned inline
+only when the remaining bytes from `offset` fit both `max_bytes` and the encoded
+response limit. Otherwise the response uses the same `offset`, `max_bytes`,
+base64 chunk, byte-count, and digest fields shown below, even when the complete
+artifact would fit the default inline-materialization limit. If the first chunk
 is incomplete, its response also returns `continuation_ref` and `expires_at`;
 every later chunk uses that continuation reference as `ref`, preserving the
 same immutable snapshot across reinstall, uninstall, or cache refresh.

@@ -326,14 +326,20 @@ cannot provide an equivalent nonblocking type check must reject local package
 ingestion rather than attempt a possibly blocking open.
 
 Tappet never validates bytes from the mutable source descriptor. Immediately
-after the regular-file check, it copies each candidate manifest or artifact
-through a bounded reader into a private Tappet-owned staging object while
-computing its length and digest. It then closes the source, durably finishes the
-staging write, prevents further writes to that object, and performs parsing,
-reference checks, Agent Skills validation, and normalization only through a
-read-only descriptor for the staged bytes. A concurrent source rewrite may
-change what the bounded copy observes, but it cannot make the published bytes
-differ from the bytes that were validated.
+after the regular-file check, it uses the descriptor metadata to reject a
+declared size above the applicable per-artifact or remaining 64 MiB package
+budget. Before copying the first byte, it atomically reserves that declared
+length from both the per-install staging quota and the prospective immutable
+snapshot quota. If a reliable length is unavailable, it reserves the full
+per-artifact maximum. It then copies through a bounded reader with one sentinel
+byte into a private Tappet-owned staging object while computing the exact length
+and digest. Growth beyond the reservation or per-artifact maximum aborts the
+install; a shorter complete copy releases unused capacity. Tappet then closes
+the source, durably finishes the staging write, prevents further writes to that
+object, and performs parsing, reference checks, Agent Skills validation, and
+normalization only through a read-only descriptor for the staged bytes. A
+concurrent source rewrite may change what the bounded copy observes, but it
+cannot make the published bytes differ from the bytes that were validated.
 
 The staged manifest is parsed first to identify its bounded artifact set; every
 referenced candidate is then staged before cross-file validation. If any copy,
@@ -520,6 +526,9 @@ canonical encoded JSON representation. These limits cover material returned by
 | YAML syntax nodes | 16,384 |
 | YAML aliases, anchors, or merge keys | 0 |
 | encoded `SKILL.md` input | 1 MiB |
+| one listed skill-resource body | 4 MiB |
+| one context-reference body | 4 MiB |
+| all immutable artifact bodies per package | 64 MiB |
 | `SKILL.md` YAML frontmatter | 64 KiB |
 | frontmatter nesting depth | 64 |
 | frontmatter syntax nodes | 16,384 |
@@ -549,8 +558,10 @@ canonical encoded JSON representation. These limits cover material returned by
 
 Invalid UTF-8 or any exceeded field, item, count, manifest, or aggregate limit
 rejects the package; Tappet never truncates a structure entry. Referenced
-artifact bodies and provider-owned schemas have their own bounded-ingestion
-limits because they are not structure metadata.
+artifact bodies use the numeric per-file and per-package limits above;
+provider-owned schemas use the independent limits in `ARCHITECTURE.md` because
+they are not package artifacts. Changing a V1-alpha artifact maximum requires
+an architecture and benchmark update.
 
 ## 10. Derived capability card
 
