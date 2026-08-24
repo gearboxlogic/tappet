@@ -88,6 +88,9 @@ Exit criteria:
 - no provider credentials appear in packages
 - validation and normalized records use private staged bytes even when source
   files mutate during installation
+- every `SKILL.md`, listed skill resource, and context reference is rejected at
+  its numeric hard limit, with aggregate staging and snapshot capacity reserved
+  before copying source bytes
 - queued and active invocations retain one immutable package and provider-binding
   generation through terminal publication
 - current tool mappings can be represented without loss
@@ -210,6 +213,9 @@ Exit criteria:
 - provider metadata refresh fails atomically at finite response, page, item, schema-byte, or aggregate-byte limits
 - duplicate provider tool names across one metadata refresh reject the snapshot
   before map insertion or schema selection
+- a received `notifications/tools/list_changed` marks the provider generation
+  dirty in wire order before asynchronous handler queueing or invocation schema
+  selection
 - external schema references and over-budget schema compilation or validation
   fail without network access or provider invocation
 
@@ -265,6 +271,8 @@ Exit criteria:
   before retaining unbounded request state
 - pre-decode header, body, and frame deadlines release ingress reservations held
   by stalled clients
+- bounded JSON-RPC IDs are enforced before dispatch, and framed transports keep
+  a separately bounded cancellation lane readable under ordinary saturation
 - listener-level HTTP connection admission bounds sockets and goroutines before
   header parsing
 - broker and downstream nesting and syntax-node limits are enforced during
@@ -272,6 +280,10 @@ Exit criteria:
 - irrelevant capabilities do not enter the transcript
 - provider authorization still applies
 - structured result survives proxying
+- `tappet.read` never returns more decoded artifact bytes than the caller's
+  `max_bytes`, including when the whole artifact could otherwise be inline
+- a spilled provider JSON-RPC error uses a bounded broker-owned outer code while
+  preserving the exact original code inside the retrievable spill
 - every returned resource link resolves through the scoped broker resource
   route without exposing unrelated provider resources
 - plaintext downstream resource URIs are discarded after materialization and
