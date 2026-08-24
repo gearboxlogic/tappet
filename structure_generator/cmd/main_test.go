@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -327,6 +328,36 @@ func TestConvertToolRejectsMissingInputSchema(t *testing.T) {
 			_, err := convertTool(json.RawMessage(testCase.tool))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), `tool "broken_tool" is missing required object inputSchema`)
+		})
+	}
+}
+
+func TestConvertToolRejectsDuplicateJSONMembers(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		tool      string
+		duplicate string
+	}{
+		{
+			name:      "top-level name",
+			tool:      `{"name":"first","name":"second","inputSchema":{}}`,
+			duplicate: "name",
+		},
+		{
+			name:      "nested schema keyword",
+			tool:      `{"name":"bounded","inputSchema":{"maximum":1,"maximum":2}}`,
+			duplicate: "maximum",
+		},
+		{
+			name:      "escape-equivalent schema keyword",
+			tool:      `{"name":"bounded","inputSchema":{"maximum":1,"maxim\u0075m":2}}`,
+			duplicate: "maximum",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := convertTool(json.RawMessage(testCase.tool))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fmt.Sprintf("duplicate JSON object member %q", testCase.duplicate))
 		})
 	}
 }
