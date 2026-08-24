@@ -233,7 +233,10 @@ catalog or add dynamic tools.
 Milestone exit also requires deterministic encoded response ceilings, a bounded
 HTTP terminal-response write deadline, attempt IDs on every initial artifact or
 spill read, and tests proving that provider resource-read errors cannot retain
-or republish a requested plaintext provider URI.
+or republish a requested plaintext provider URI. Embedded-resource blocks must
+also rewrite every provider URI to a readable broker snapshot before inline or
+spill publication, and each complete snapshot read must fit the outward
+response ceiling.
 
 Test environment:
 
