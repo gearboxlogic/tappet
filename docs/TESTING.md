@@ -33,6 +33,6 @@ Milestone 1 should recheck the serialization rule against the selected SDK versi
 
 ## Failed provider initialization
 
-At `mcp-go v0.43.2`, closing a failed stdio client can block while waiting for its child process. Tappet returns the original start or initialize error and performs that cleanup asynchronously. `TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds a failed client's `Close` call open and verifies that another provider can still load.
+At `mcp-go v0.43.2`, ordinary close can block while waiting for a failed stdio child. Tappet's failure-specific close path kills and reaps that child under a finite cleanup context before returning the original start or initialize error. Cleanup occurs outside the registry lock: `TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds one provider's context-aware cleanup open while another provider loads, `TestFailedProviderCleanupHonorsDeadline` covers the cleanup deadline, and `TestFailedStdioCleanupKillsAndReapsProvider` exercises the production stdio process path.
 
 Provider startup is coordinated per provider rather than under the registry-wide lock. `TestSlowProviderLoadDoesNotBlockOtherProviders` proves that one cold provider does not block another, `TestConcurrentCallsShareOneProviderLoad` proves concurrent requests do not duplicate startup, `TestLiveWaiterRetriesLoadCanceledByInitiatingCaller` gives each live waiter its own acquisition budget, and `TestProviderFinishingAfterRegistryCloseIsClosed` covers the shutdown race.

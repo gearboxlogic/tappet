@@ -516,6 +516,25 @@ func (t *limitedStdioTransport) Close() error {
 	return errors.Join(closeErr, waitErr)
 }
 
+func (t *limitedStdioTransport) CloseFailed(ctx context.Context) error {
+	t.mu.Lock()
+	t.closed = true
+	commandIO := t.commandIO
+	t.mu.Unlock()
+	if commandIO == nil || commandIO.Process == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	killErr := commandIO.Process.Kill()
+	waitErr := commandIO.Wait()
+	if killErr == nil || errors.Is(killErr, os.ErrProcessDone) {
+		return nil
+	}
+	return errors.Join(killErr, waitErr)
+}
+
 func (*limitedStdioTransport) GetSessionId() string {
 	return ""
 }

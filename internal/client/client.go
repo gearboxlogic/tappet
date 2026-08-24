@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/gearboxlogic/tappet/internal/config"
@@ -21,6 +24,7 @@ type Client struct {
 	needPing        bool
 	needManualStart bool
 	client          *client.Client
+	closeFailed     func(context.Context) error
 }
 
 const (
@@ -59,13 +63,12 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 				name:            name,
 				needManualStart: true,
 				client:          client.NewClient(newResponseValidatingTransport(stdioTransport, stdioTransport.validation)),
+				closeFailed:     stdioTransport.CloseFailed,
 			}, nil
 		}
-		mcpClient, err := client.NewStdioMCPClient(value.Command, envs, value.Args...)
-		if err != nil {
-			return nil, err
-		}
-		return &Client{name: name, client: mcpClient}, nil
+		managed := &managedCommand{}
+		stdioTransport := transport.NewStdioWithOptions(value.Command, envs, value.Args, transport.WithCommandFunc(managed.command))
+		return &Client{name: name, client: client.NewClient(stdioTransport), closeFailed: managed.terminate}, nil
 
 	case *config.SSEMCPClientConfig:
 		var options []transport.ClientOption
@@ -92,6 +95,7 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 			needPing:        true,
 			needManualStart: true,
 			client:          mcpClient,
+			closeFailed:     func(context.Context) error { return mcpClient.Close() },
 		}, nil
 
 	case *config.StreamableMCPClientConfig:
@@ -122,6 +126,7 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 			needPing:        true,
 			needManualStart: true,
 			client:          mcpClient,
+			closeFailed:     func(context.Context) error { return mcpClient.Close() },
 		}, nil
 	}
 	return nil, errors.New("invalid client type")
@@ -167,6 +172,19 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// CloseFailed terminates a provider that did not finish startup. Stdio clients
+// kill and reap their child directly so mcp-go cannot block waiting for a child
+// that is still holding its pipes open.
+func (c *Client) CloseFailed(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.closeFailed != nil {
+		return c.closeFailed(ctx)
+	}
+	return c.Close()
+}
+
 // CallTool invokes a tool through the downstream MCP client.
 func (c *Client) CallTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return c.client.CallTool(ctx, request)
@@ -190,4 +208,36 @@ func (c *Client) NeedPing() bool {
 // StartPingTask pings until the provider lifecycle context is canceled.
 func (c *Client) StartPingTask(ctx context.Context) {
 	c.startPingTask(ctx)
+}
+
+type managedCommand struct {
+	mu  sync.Mutex
+	cmd *exec.Cmd
+}
+
+func (c *managedCommand) command(ctx context.Context, command string, env, args []string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = append(os.Environ(), env...)
+	c.mu.Lock()
+	c.cmd = cmd
+	c.mu.Unlock()
+	return cmd, nil
+}
+
+func (c *managedCommand) terminate(ctx context.Context) error {
+	c.mu.Lock()
+	cmd := c.cmd
+	c.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	killErr := cmd.Process.Kill()
+	waitErr := cmd.Wait()
+	if killErr == nil || errors.Is(killErr, os.ErrProcessDone) {
+		return nil
+	}
+	return errors.Join(killErr, waitErr)
 }

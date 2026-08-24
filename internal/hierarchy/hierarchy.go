@@ -501,7 +501,10 @@ func markProviderLoadCanceledByInitiator(err error) error {
 type ProviderClient interface {
 	CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
 	Close() error
+	CloseFailed(context.Context) error
 }
+
+const failedProviderCleanupTimeout = 2 * time.Second
 
 // ProviderClientFactory starts and initializes one downstream MCP client.
 type ProviderClientFactory func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error)
@@ -634,7 +637,7 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 		r.mu.Unlock()
 
 		if err != nil && mcpClient != nil {
-			closeFailedProviderAsync(serverName, mcpClient)
+			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
 			return nil, err
 		}
 		return mcpClient, err
@@ -652,7 +655,7 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		startCtx = newProviderStartContext(ctx, lifecycleCtx)
 		if err := mcpClient.GetClient().Start(startCtx); err != nil {
 			startCtx.abort()
-			closeFailedProviderAsync(serverName, mcpClient)
+			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
 			}
@@ -660,7 +663,7 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		}
 		if ctx.Err() != nil {
 			startCtx.abort()
-			closeFailedProviderAsync(serverName, mcpClient)
+			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
 			return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
 		}
 		startCtx.detach()
@@ -675,7 +678,7 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		if startCtx != nil {
 			startCtx.abort()
 		}
-		closeFailedProviderAsync(serverName, mcpClient)
+		closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
 		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 			return nil, fmt.Errorf("failed to initialize MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
 		}
@@ -779,15 +782,14 @@ func (c *providerStartContext) cancel(err error) {
 	close(c.done)
 }
 
-// closeFailedProviderAsync keeps mcp-go stdio cleanup from hiding the start or
-// initialize error. In v0.43.2, closing a failed stdio client can block while
-// waiting for its child process, so this error path must not wait for Close.
-func closeFailedProviderAsync(serverName string, provider ProviderClient) {
-	go func() {
-		if err := provider.Close(); err != nil {
-			log.Printf("Failed to close MCP client for provider %s after initialization failure: %v", serverName, err)
-		}
-	}()
+// closeFailedProvider uses the provider's failure-specific, context-aware
+// cleanup path. Stdio implementations kill and reap their child before return.
+func closeFailedProvider(serverName string, provider ProviderClient, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := provider.CloseFailed(ctx); err != nil {
+		log.Printf("Failed to close MCP client for provider %s after initialization failure: %v", serverName, err)
+	}
 }
 
 // Close closes all clients in the registry

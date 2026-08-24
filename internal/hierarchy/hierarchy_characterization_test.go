@@ -183,7 +183,7 @@ func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
 	initializeErr := errors.New("initialize failed")
 	registry := newServerRegistry(characterizationConfigs(), func(_ context.Context, name string, _ *config.MCPClientConfigV2) (ProviderClient, error) {
 		if name == "provider-a" {
-			closeFailedProviderAsync(name, failedProvider)
+			closeFailedProvider(name, failedProvider, time.Second)
 			return nil, initializeErr
 		}
 		return ProviderClientFunc(func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -192,16 +192,16 @@ func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
 	})
 	defer registry.Close()
 
-	_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
-	assert.ErrorIs(t, err, initializeErr)
-	require.Eventually(t, func() bool {
-		select {
-		case <-closeStarted:
-			return true
-		default:
-			return false
-		}
-	}, time.Second, time.Millisecond)
+	providerAResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		providerAResult <- err
+	}()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("failed-provider cleanup did not start")
+	}
 
 	loaded := make(chan error, 1)
 	go func() {
@@ -216,10 +216,36 @@ func TestFailedProviderCleanupDoesNotBlockOtherProviderLoads(t *testing.T) {
 	}
 
 	close(releaseClose)
+	assert.ErrorIs(t, <-providerAResult, initializeErr)
 	select {
 	case <-closeDone:
 	case <-time.After(time.Second):
 		t.Fatal("failed-provider cleanup did not finish after release")
+	}
+}
+
+func TestFailedProviderCleanupHonorsDeadline(t *testing.T) {
+	closeStarted := make(chan struct{})
+	closeDone := make(chan struct{})
+	provider := &blockingCloseProvider{
+		closeStarted: closeStarted,
+		release:      make(chan struct{}),
+		closeDone:    closeDone,
+	}
+
+	started := time.Now()
+	closeFailedProvider("blocked-provider", provider, 20*time.Millisecond)
+
+	assert.Less(t, time.Since(started), time.Second)
+	select {
+	case <-closeStarted:
+	default:
+		t.Fatal("failed-provider cleanup did not start")
+	}
+	select {
+	case <-closeDone:
+	default:
+		t.Fatal("failed-provider cleanup did not stop at its deadline")
 	}
 }
 
@@ -640,6 +666,8 @@ func (f ProviderClientFunc) CallTool(ctx context.Context, request mcp.CallToolRe
 
 func (ProviderClientFunc) Close() error { return nil }
 
+func (ProviderClientFunc) CloseFailed(context.Context) error { return nil }
+
 type staticProvider struct{}
 
 func (*staticProvider) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -647,6 +675,8 @@ func (*staticProvider) CallTool(context.Context, mcp.CallToolRequest) (*mcp.Call
 }
 
 func (*staticProvider) Close() error { return nil }
+
+func (*staticProvider) CloseFailed(context.Context) error { return nil }
 
 type signalCloseProvider struct {
 	closed chan struct{}
@@ -661,6 +691,8 @@ func (p *signalCloseProvider) Close() error {
 	p.once.Do(func() { close(p.closed) })
 	return nil
 }
+
+func (p *signalCloseProvider) CloseFailed(context.Context) error { return p.Close() }
 
 type blockingCloseProvider struct {
 	closeStarted chan struct{}
@@ -677,6 +709,18 @@ func (p *blockingCloseProvider) Close() error {
 	<-p.release
 	close(p.closeDone)
 	return nil
+}
+
+func (p *blockingCloseProvider) CloseFailed(ctx context.Context) error {
+	close(p.closeStarted)
+	select {
+	case <-p.release:
+		close(p.closeDone)
+		return nil
+	case <-ctx.Done():
+		close(p.closeDone)
+		return ctx.Err()
+	}
 }
 
 type lifecycleRecorder struct {
@@ -713,6 +757,8 @@ func (c *recordingProviderClient) Close() error {
 	})
 	return err
 }
+
+func (c *recordingProviderClient) CloseFailed(context.Context) error { return c.Close() }
 
 func recordingFactory(recorder *lifecycleRecorder, handler mcpserver.ToolHandlerFunc) ProviderClientFactory {
 	return func(ctx context.Context, name string, _ *config.MCPClientConfigV2) (ProviderClient, error) {
