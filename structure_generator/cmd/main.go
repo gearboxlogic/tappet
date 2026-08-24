@@ -53,6 +53,10 @@ type catalogToolsPage struct {
 }
 
 func (p *catalogToolsPage) UnmarshalJSON(data []byte) error {
+	if err := rejectDuplicateJSONMembers(data); err != nil {
+		return fmt.Errorf("invalid tools/list result: %w", err)
+	}
+
 	var wire struct {
 		NextCursor mcp.Cursor      `json:"nextCursor,omitempty"`
 		Tools      json.RawMessage `json:"tools"`

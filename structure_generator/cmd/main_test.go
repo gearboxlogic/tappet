@@ -409,6 +409,32 @@ func TestCatalogToolsPageAcceptsEmptyToolsArray(t *testing.T) {
 	assert.Equal(t, mcp.Cursor("next"), page.NextCursor)
 }
 
+func TestCatalogToolsPageRejectsDuplicateJSONMembers(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		result    string
+		duplicate string
+	}{
+		{
+			name:      "tools",
+			result:    `{"tools":[],"tools":[{"name":"hidden","inputSchema":{}}]}`,
+			duplicate: "tools",
+		},
+		{
+			name:      "next cursor",
+			result:    `{"tools":[],"nextCursor":"first","nextCursor":"second"}`,
+			duplicate: "nextCursor",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var page catalogToolsPage
+			err := json.Unmarshal([]byte(testCase.result), &page)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fmt.Sprintf("duplicate JSON object member %q", testCase.duplicate))
+		})
+	}
+}
+
 func TestGeneratorStdioProvider(t *testing.T) {
 	if os.Getenv("TAPPET_GENERATOR_FIXTURE") != "enabled" {
 		return
