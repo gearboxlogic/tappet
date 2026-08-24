@@ -362,6 +362,27 @@ func TestConvertToolRejectsDuplicateJSONMembers(t *testing.T) {
 	}
 }
 
+func TestDecodeServerToolsPreservesNumericSchemaConstraints(t *testing.T) {
+	serverTools, err := decodeServerTools([]byte(`{
+		"serverName":"precision-provider",
+		"tools":[{
+			"name":"precise",
+			"inputSchema":{},
+			"outputSchema":{"type":"integer","minimum":9007199254740993}
+		}]
+	}`))
+	require.NoError(t, err)
+	require.Len(t, serverTools.Tools, 1)
+
+	minimum, ok := serverTools.Tools[0].OutputSchema["minimum"].(json.Number)
+	require.True(t, ok, "minimum decoded as %T", serverTools.Tools[0].OutputSchema["minimum"])
+	assert.Equal(t, "9007199254740993", minimum.String())
+
+	encoded, err := json.Marshal(serverTools)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"minimum":9007199254740993`)
+}
+
 func TestCatalogToolsPageRequiresToolsArray(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string

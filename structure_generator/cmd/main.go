@@ -188,8 +188,8 @@ func main() {
 				log.Fatalf("Failed to read %s: %v", inputFile, err)
 			}
 
-			var serverTools generator.ServerTools
-			if err := json.Unmarshal(data, &serverTools); err != nil {
+			serverTools, err := decodeServerTools(data)
+			if err != nil {
 				log.Fatalf("Failed to parse %s: %v", inputFile, err)
 			}
 
@@ -479,6 +479,20 @@ func convertTool(data json.RawMessage) (generator.Tool, error) {
 		OutputSchema: fields.OutputSchema,
 		Annotations:  fields.Annotations,
 	}, nil
+}
+
+func decodeServerTools(data []byte) (generator.ServerTools, error) {
+	if err := rejectDuplicateJSONMembers(data); err != nil {
+		return generator.ServerTools{}, fmt.Errorf("invalid pre-fetched server metadata: %w", err)
+	}
+
+	var serverTools generator.ServerTools
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&serverTools); err != nil {
+		return generator.ServerTools{}, err
+	}
+	return serverTools, nil
 }
 
 func rejectDuplicateJSONMembers(data []byte) error {
