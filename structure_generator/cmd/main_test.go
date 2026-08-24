@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -292,6 +294,49 @@ func TestFetchFromConfigSupportsStreamableHTTPHeaders(t *testing.T) {
 	assert.Equal(t, false, servers[0].Tools[0].InputSchema["additionalProperties"])
 	assert.Contains(t, servers[0].Tools[0].OutputSchema, "patternProperties")
 	require.Equal(t, "Bearer configured-token", <-headers)
+}
+
+func TestFetchFromConfigRejectsDuplicateOuterJSONRPCMembers(t *testing.T) {
+	provider := mcpserver.NewMCPServer("duplicate-envelope-fixture", "test")
+	handler := mcpserver.NewStreamableHTTPServer(provider, mcpserver.WithStateLess(true))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if request.Method != "tools/list" {
+			handler.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[]},"result":{"tools":[{"name":"hidden","inputSchema":{}}]}}`, request.ID)
+	}))
+	t.Cleanup(server.Close)
+
+	configPath := writeGeneratorConfig(t, Config{MCPServers: map[string]*config.MCPClientConfigV2{
+		"duplicate-envelope": {
+			TransportType: config.MCPClientTypeStreamable,
+			URL:           server.URL,
+		},
+	}})
+
+	servers, err := fetchFromConfig(configPath)
+
+	assert.Nil(t, servers)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `duplicate JSON object member "result"`)
 }
 
 func TestConvertToolPreservesSchemaNumbersAndTopLevelTitle(t *testing.T) {

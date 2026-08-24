@@ -84,6 +84,29 @@ func TestResponseLimitedRoundTripperBoundsUndeclaredBody(t *testing.T) {
 	require.ErrorIs(t, readErr, ErrResponseLimitExceeded)
 }
 
+func TestResponseLimitedRoundTripperRejectsDuplicateJSONBeforeRelease(t *testing.T) {
+	validation := newResponseValidation()
+	roundTripper := responseLimitedRoundTripper{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":{},"result":{}}`)),
+				ContentLength: -1,
+				Header:        http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		}),
+		maxBytes:   1_024,
+		validation: validation,
+	}
+
+	response, err := roundTripper.RoundTrip(mustRequest(t))
+	require.NoError(t, err)
+	data, readErr := io.ReadAll(response.Body)
+
+	assert.Empty(t, data)
+	require.ErrorIs(t, readErr, ErrDuplicateJSONMember)
+}
+
 func TestResponseLimitedRoundTripperResetsLimitForEachSSEEvent(t *testing.T) {
 	event := "data: 1234\r\n\r\n"
 	stream := event + event
@@ -160,6 +183,30 @@ func TestResponseLimitedRoundTripperRejectsOversizedSSEEventBeforeRelease(t *tes
 	assert.True(t, body.closed.Load())
 }
 
+func TestResponseLimitedRoundTripperRejectsDuplicateSSEJSONBeforeRelease(t *testing.T) {
+	event := "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{},\"result\":{}}\n\n"
+	validation := newResponseValidation()
+	roundTripper := responseLimitedRoundTripper{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          io.NopCloser(strings.NewReader(event)),
+				ContentLength: int64(len(event)),
+				Header:        http.Header{"Content-Type": []string{"text/event-stream"}},
+			}, nil
+		}),
+		maxBytes:   int64(len(event)),
+		validation: validation,
+	}
+
+	response, err := roundTripper.RoundTrip(mustRequest(t))
+	require.NoError(t, err)
+	data, readErr := io.ReadAll(response.Body)
+
+	assert.Empty(t, data)
+	require.ErrorIs(t, readErr, ErrDuplicateJSONMember)
+}
+
 func TestLimitedStdioClientDefersProcessStart(t *testing.T) {
 	mcpClient, err := NewMCPClientWithResponseLimit("bounded", &config.MCPClientConfigV2{
 		TransportType: config.MCPClientTypeStdio,
@@ -214,6 +261,38 @@ func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {
 
 	assert.Nil(t, response)
 	require.ErrorIs(t, err, ErrResponseLimitExceeded)
+}
+
+func TestLimitedStdioClientRejectsDuplicateEnvelopeBeforeDecode(t *testing.T) {
+	if os.Getenv("TAPPET_DUPLICATE_FIXTURE") == "1" {
+		var request string
+		_, _ = fmt.Fscanln(os.Stdin, &request)
+		fmt.Println(`{"jsonrpc":"2.0","id":1,"result":{},"result":{"tools":[]}}`)
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return
+	}
+
+	mcpClient, err := NewMCPClientWithResponseLimit("duplicate", &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeStdio,
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=^TestLimitedStdioClientRejectsDuplicateEnvelopeBeforeDecode$"},
+		Env:           map[string]string{"TAPPET_DUPLICATE_FIXTURE": "1"},
+	}, 1_024)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, mcpClient.GetClient().Start(ctx))
+	t.Cleanup(func() { _ = mcpClient.Close() })
+
+	response, err := mcpClient.GetClient().GetTransport().SendRequest(ctx, transport.JSONRPCRequest{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		ID:      mcp.NewRequestId(1),
+		Method:  "fixture/duplicate",
+	})
+
+	assert.Nil(t, response)
+	require.ErrorIs(t, err, ErrDuplicateJSONMember)
 }
 
 func TestAwaitLimitedStdioResponsePrefersLimitSignal(t *testing.T) {

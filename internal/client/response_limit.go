@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,8 +23,9 @@ import (
 var ErrResponseLimitExceeded = errors.New("downstream response exceeds configured byte limit")
 
 type responseLimitedRoundTripper struct {
-	base     http.RoundTripper
-	maxBytes int64
+	base       http.RoundTripper
+	maxBytes   int64
+	validation *responseValidation
 }
 
 func (t responseLimitedRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -33,18 +35,14 @@ func (t responseLimitedRoundTripper) RoundTrip(request *http.Request) (*http.Res
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType == "text/event-stream" {
-		response.Body = newSSEEventLimitedBody(response.Body, t.maxBytes)
+		response.Body = newSSEEventLimitedBody(response.Body, t.maxBytes, t.validation)
 		return response, nil
 	}
 	if response.ContentLength > t.maxBytes {
 		_ = response.Body.Close()
 		return nil, fmt.Errorf("%w: content length %d exceeds %d bytes", ErrResponseLimitExceeded, response.ContentLength, t.maxBytes)
 	}
-	response.Body = &responseLimitedBody{
-		body:      response.Body,
-		remaining: t.maxBytes,
-		maxBytes:  t.maxBytes,
-	}
+	response.Body = newResponseLimitedBody(response.Body, t.maxBytes, t.validation)
 	return response, nil
 }
 
@@ -52,15 +50,17 @@ type sseEventLimitedBody struct {
 	body       io.ReadCloser
 	reader     *bufio.Reader
 	maxBytes   int64
+	validation *responseValidation
 	pending    []byte
 	pendingErr error
 }
 
-func newSSEEventLimitedBody(body io.ReadCloser, maxBytes int64) *sseEventLimitedBody {
+func newSSEEventLimitedBody(body io.ReadCloser, maxBytes int64, validation *responseValidation) *sseEventLimitedBody {
 	return &sseEventLimitedBody{
-		body:     body,
-		reader:   bufio.NewReader(body),
-		maxBytes: maxBytes,
+		body:       body,
+		reader:     bufio.NewReader(body),
+		maxBytes:   maxBytes,
+		validation: validation,
 	}
 }
 
@@ -118,6 +118,10 @@ func (b *sseEventLimitedBody) readEvent() ([]byte, error) {
 		}
 
 		if atLineStart {
+			if err := validateSSEEvent(event, b.validation); err != nil {
+				_ = b.body.Close()
+				return nil, err
+			}
 			return event, nil
 		}
 		atLineStart = true
@@ -128,28 +132,75 @@ func (b *sseEventLimitedBody) Close() error {
 	return b.body.Close()
 }
 
+func validateSSEEvent(event []byte, validation *responseValidation) error {
+	normalized := bytes.ReplaceAll(event, []byte("\r\n"), []byte("\n"))
+	normalized = bytes.ReplaceAll(normalized, []byte("\r"), []byte("\n"))
+	var dataLines [][]byte
+	for _, line := range bytes.Split(normalized, []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimPrefix(line, []byte("data:"))
+		if len(data) > 0 && data[0] == ' ' {
+			data = data[1:]
+		}
+		dataLines = append(dataLines, data)
+	}
+	return validateJSONMessage(bytes.Join(dataLines, []byte("\n")), validation)
+}
+
 type responseLimitedBody struct {
-	body      io.ReadCloser
-	remaining int64
-	maxBytes  int64
+	body       io.ReadCloser
+	maxBytes   int64
+	validation *responseValidation
+	loaded     bool
+	pending    []byte
+	pendingErr error
+}
+
+func newResponseLimitedBody(body io.ReadCloser, maxBytes int64, validation *responseValidation) *responseLimitedBody {
+	return &responseLimitedBody{body: body, maxBytes: maxBytes, validation: validation}
 }
 
 func (b *responseLimitedBody) Read(buffer []byte) (int, error) {
-	if b.remaining == 0 {
-		var extra [1]byte
-		count, err := b.body.Read(extra[:])
-		if count > 0 {
-			_ = b.body.Close()
-			return 0, fmt.Errorf("%w: response exceeds %d bytes", ErrResponseLimitExceeded, b.maxBytes)
-		}
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if !b.loaded {
+		b.load()
+	}
+	if len(b.pending) > 0 {
+		count := copy(buffer, b.pending)
+		b.pending = b.pending[count:]
+		return count, nil
+	}
+	if b.pendingErr != nil {
+		err := b.pendingErr
+		b.pendingErr = nil
 		return 0, err
 	}
-	if int64(len(buffer)) > b.remaining {
-		buffer = buffer[:b.remaining]
+	return 0, io.EOF
+}
+
+func (b *responseLimitedBody) load() {
+	b.loaded = true
+	data, err := io.ReadAll(io.LimitReader(b.body, b.maxBytes+1))
+	if err != nil {
+		b.pendingErr = err
+		return
 	}
-	count, err := b.body.Read(buffer)
-	b.remaining -= int64(count)
-	return count, err
+	if int64(len(data)) > b.maxBytes {
+		b.pending = data[:b.maxBytes]
+		b.pendingErr = fmt.Errorf("%w: response exceeds %d bytes", ErrResponseLimitExceeded, b.maxBytes)
+		_ = b.body.Close()
+		return
+	}
+	if err := validateJSONMessage(data, b.validation); err != nil {
+		b.pendingErr = err
+		_ = b.body.Close()
+		return
+	}
+	b.pending = data
 }
 
 func (b *responseLimitedBody) Close() error {
@@ -157,11 +208,15 @@ func (b *responseLimitedBody) Close() error {
 }
 
 func newResponseLimitedHTTPClient(base http.RoundTripper, timeout time.Duration, maxBytes int64) *http.Client {
+	return newResponseLimitedHTTPClientWithValidation(base, timeout, maxBytes, nil)
+}
+
+func newResponseLimitedHTTPClientWithValidation(base http.RoundTripper, timeout time.Duration, maxBytes int64, validation *responseValidation) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	return &http.Client{
-		Transport: responseLimitedRoundTripper{base: base, maxBytes: maxBytes},
+		Transport: responseLimitedRoundTripper{base: base, maxBytes: maxBytes, validation: validation},
 		Timeout:   timeout,
 	}
 }
@@ -170,16 +225,22 @@ type boundedLineReader struct {
 	reader      *bufio.Reader
 	maxBytes    int64
 	onLimit     func()
+	validation  *responseValidation
 	pending     []byte
 	pendingErr  error
 	limitSignal sync.Once
 }
 
 func newBoundedLineReader(reader io.Reader, maxBytes int64, onLimit func()) *boundedLineReader {
+	return newValidatedBoundedLineReader(reader, maxBytes, onLimit, nil)
+}
+
+func newValidatedBoundedLineReader(reader io.Reader, maxBytes int64, onLimit func(), validation *responseValidation) *boundedLineReader {
 	return &boundedLineReader{
-		reader:   bufio.NewReader(reader),
-		maxBytes: maxBytes,
-		onLimit:  onLimit,
+		reader:     bufio.NewReader(reader),
+		maxBytes:   maxBytes,
+		onLimit:    onLimit,
+		validation: validation,
 	}
 }
 
@@ -221,13 +282,23 @@ func (r *boundedLineReader) readLine() ([]byte, error) {
 		line = append(line, fragment...)
 		switch {
 		case err == nil:
-			return line, nil
+			return r.validateLine(line, nil)
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		default:
-			return line, err
+			return r.validateLine(line, err)
 		}
 	}
+}
+
+func (r *boundedLineReader) validateLine(line []byte, readErr error) ([]byte, error) {
+	if len(line) == 0 {
+		return line, readErr
+	}
+	if err := validateJSONMessage(line, r.validation); err != nil {
+		return nil, err
+	}
+	return line, readErr
 }
 
 type limitedStdioTransport struct {
@@ -236,13 +307,14 @@ type limitedStdioTransport struct {
 	args     []string
 	maxBytes int64
 
-	mu        sync.Mutex
-	started   bool
-	closed    bool
-	inner     *transport.Stdio
-	commandIO *exec.Cmd
-	limitCh   chan struct{}
-	limitOnce sync.Once
+	mu         sync.Mutex
+	started    bool
+	closed     bool
+	inner      *transport.Stdio
+	commandIO  *exec.Cmd
+	limitCh    chan struct{}
+	limitOnce  sync.Once
+	validation *responseValidation
 
 	notificationHandler func(mcp.JSONRPCNotification)
 	requestHandler      transport.RequestHandler
@@ -250,11 +322,12 @@ type limitedStdioTransport struct {
 
 func newLimitedStdioTransport(command string, env, args []string, maxBytes int64) *limitedStdioTransport {
 	return &limitedStdioTransport{
-		command:  command,
-		env:      append([]string(nil), env...),
-		args:     append([]string(nil), args...),
-		maxBytes: maxBytes,
-		limitCh:  make(chan struct{}),
+		command:    command,
+		env:        append([]string(nil), env...),
+		args:       append([]string(nil), args...),
+		maxBytes:   maxBytes,
+		limitCh:    make(chan struct{}),
+		validation: newResponseValidation(),
 	}
 }
 
@@ -287,7 +360,7 @@ func (t *limitedStdioTransport) Start(ctx context.Context) error {
 	}
 
 	t.commandIO = commandIO
-	limitedStdout := newBoundedLineReader(stdout, t.maxBytes, t.signalLimit)
+	limitedStdout := newValidatedBoundedLineReader(stdout, t.maxBytes, t.signalLimit, t.validation)
 	t.inner = transport.NewIO(limitedStdout, stdin, stderr)
 	installInboundHandlers(t.inner, t.notificationHandler, t.requestHandler)
 	if err := t.inner.Start(ctx); err != nil {

@@ -53,7 +53,7 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 			return &Client{
 				name:            name,
 				needManualStart: true,
-				client:          client.NewClient(stdioTransport),
+				client:          client.NewClient(newResponseValidatingTransport(stdioTransport, stdioTransport.validation)),
 			}, nil
 		}
 		mcpClient, err := client.NewStdioMCPClient(value.Command, envs, value.Args...)
@@ -64,15 +64,23 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 
 	case *config.SSEMCPClientConfig:
 		var options []transport.ClientOption
+		var validation *responseValidation
 		if maxResponseBytes > 0 {
-			options = append(options, client.WithHTTPClient(newResponseLimitedHTTPClient(http.DefaultTransport, 0, maxResponseBytes)))
+			validation = newResponseValidation()
+			options = append(options, client.WithHTTPClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, 0, maxResponseBytes, validation)))
 		}
 		if len(value.Headers) > 0 {
 			options = append(options, client.WithHeaders(value.Headers))
 		}
-		mcpClient, err := client.NewSSEMCPClient(value.URL, options...)
+		sseTransport, err := transport.NewSSE(value.URL, options...)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create SSE transport: %w", err)
+		}
+		var mcpClient *client.Client
+		if validation != nil {
+			mcpClient = client.NewClient(newResponseValidatingTransport(sseTransport, validation))
+		} else {
+			mcpClient = client.NewClient(sseTransport)
 		}
 		return &Client{
 			name:            name,
@@ -83,8 +91,10 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 
 	case *config.StreamableMCPClientConfig:
 		var options []transport.StreamableHTTPCOption
+		var validation *responseValidation
 		if maxResponseBytes > 0 {
-			options = append(options, transport.WithHTTPBasicClient(newResponseLimitedHTTPClient(http.DefaultTransport, value.Timeout, maxResponseBytes)))
+			validation = newResponseValidation()
+			options = append(options, transport.WithHTTPBasicClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, value.Timeout, maxResponseBytes, validation)))
 		}
 		if len(value.Headers) > 0 {
 			options = append(options, transport.WithHTTPHeaders(value.Headers))
@@ -92,9 +102,15 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 		if value.Timeout > 0 && maxResponseBytes == 0 {
 			options = append(options, transport.WithHTTPTimeout(value.Timeout))
 		}
-		mcpClient, err := client.NewStreamableHttpClient(value.URL, options...)
+		streamableTransport, err := transport.NewStreamableHTTP(value.URL, options...)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create SSE transport: %w", err)
+		}
+		var mcpClient *client.Client
+		if validation != nil {
+			mcpClient = client.NewClient(newResponseValidatingTransport(streamableTransport, validation))
+		} else {
+			mcpClient = client.NewClient(streamableTransport)
 		}
 		return &Client{
 			name:            name,

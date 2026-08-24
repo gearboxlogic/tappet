@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"sort"
@@ -53,7 +52,7 @@ type catalogToolsPage struct {
 }
 
 func (p *catalogToolsPage) UnmarshalJSON(data []byte) error {
-	if err := rejectDuplicateJSONMembers(data); err != nil {
+	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
 		return fmt.Errorf("invalid tools/list result: %w", err)
 	}
 
@@ -452,7 +451,7 @@ func closeCatalogClientAsync(name string, catalog catalogClient) {
 }
 
 func convertTool(data json.RawMessage) (generator.Tool, error) {
-	if err := rejectDuplicateJSONMembers(data); err != nil {
+	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
 		return generator.Tool{}, fmt.Errorf("invalid tool metadata: %w", err)
 	}
 	var fields struct {
@@ -486,7 +485,7 @@ func convertTool(data json.RawMessage) (generator.Tool, error) {
 }
 
 func decodeServerTools(data []byte) (generator.ServerTools, error) {
-	if err := rejectDuplicateJSONMembers(data); err != nil {
+	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
 		return generator.ServerTools{}, fmt.Errorf("invalid pre-fetched server metadata: %w", err)
 	}
 
@@ -497,70 +496,4 @@ func decodeServerTools(data []byte) (generator.ServerTools, error) {
 		return generator.ServerTools{}, err
 	}
 	return serverTools, nil
-}
-
-func rejectDuplicateJSONMembers(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := scanJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func scanJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-
-	switch delimiter {
-	case '{':
-		members := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("JSON object member name is not a string")
-			}
-			if _, exists := members[key]; exists {
-				return fmt.Errorf("duplicate JSON object member %q", key)
-			}
-			members[key] = struct{}{}
-			if err := scanJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-	case '[':
-		for decoder.More() {
-			if err := scanJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-	default:
-		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
-	}
-
-	closingToken, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	closingDelimiter, ok := closingToken.(json.Delim)
-	if !ok || (delimiter == '{' && closingDelimiter != '}') || (delimiter == '[' && closingDelimiter != ']') {
-		return errors.New("mismatched JSON delimiter")
-	}
-	return nil
 }
