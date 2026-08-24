@@ -16,7 +16,8 @@ Work:
 - rename module, imports, binaries, and docs from Lazy MCP to Tappet
 - establish upstream attribution and license notices
 - add CI for tests, race detection, vet, formatting, and static analysis
-- record current tool-surface and startup benchmarks
+- record current tool-surface and server-construction benchmarks
+  ([Milestone 0 baseline](BASELINE_BENCHMARKS.md))
 - retain inherited outward `authTokens` and provider `env`, `headers`, command
   arguments, URLs, and configuration-fetch headers as explicitly grandfathered,
   redacted compatibility inputs

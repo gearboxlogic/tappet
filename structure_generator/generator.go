@@ -2,20 +2,247 @@ package structure_generator
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // GenerateStructure creates a two-layer folder structure from MCP server tools
 // Structure: structure/ (root) -> server_name/ (each server)
 func GenerateStructure(servers []ServerTools, outputDir string) error {
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	cleanOutputDir := filepath.Clean(outputDir)
+	if err := validateOutputLocation(cleanOutputDir); err != nil {
+		return err
+	}
+	if err := validateGeneratedNames(servers); err != nil {
+		return err
+	}
+	parentDir := filepath.Dir(cleanOutputDir)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output parent directory: %w", err)
 	}
 
+	if err := validateExistingHierarchyDirectory(cleanOutputDir); err != nil {
+		return err
+	}
+
+	stagingDir, err := os.MkdirTemp(parentDir, "."+filepath.Base(cleanOutputDir)+".tmp-")
+	if err != nil {
+		return fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDir)
+	if err := os.Chmod(stagingDir, 0755); err != nil {
+		return fmt.Errorf("failed to set staging directory permissions: %w", err)
+	}
+
+	if err := generateStructure(servers, stagingDir); err != nil {
+		return err
+	}
+	if err := replaceGeneratedDirectory(stagingDir, cleanOutputDir); err != nil {
+		return fmt.Errorf("failed to publish generated structure: %w", err)
+	}
+	return nil
+}
+
+func validateOutputLocation(outputDir string) error {
+	absOutput, err := filepath.Abs(outputDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve output path: %w", err)
+	}
+	absWorkingDir, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("failed to resolve working directory: %w", err)
+	}
+	outputContainsWorkingDir := false
+	if strings.EqualFold(filepath.VolumeName(absOutput), filepath.VolumeName(absWorkingDir)) {
+		relativeWorkingDir, relErr := filepath.Rel(absOutput, absWorkingDir)
+		if relErr != nil {
+			return fmt.Errorf("failed to compare output path with working directory: %w", relErr)
+		}
+		outputContainsWorkingDir = relativeWorkingDir == "." ||
+			(relativeWorkingDir != ".." && !strings.HasPrefix(relativeWorkingDir, ".."+string(filepath.Separator)))
+	}
+	absTempDir, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		return fmt.Errorf("failed to resolve temporary directory: %w", err)
+	}
+	if outputContainsWorkingDir || absOutput == absTempDir {
+		return fmt.Errorf("output path must be a dedicated hierarchy directory: %s", outputDir)
+	}
+	return nil
+}
+
+func validateExistingHierarchyDirectory(outputDir string) error {
+	info, err := os.Lstat(outputDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to inspect output path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace symlinked output directory: %s", outputDir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to replace non-directory output path: %s", outputDir)
+	}
+
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return fmt.Errorf("failed to inspect output directory: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	rootFound := false
+	for _, entry := range entries {
+		if entry.Name() == "root.json" {
+			if entry.Type().IsRegular() {
+				var root ToolNode
+				data, readErr := os.ReadFile(filepath.Join(outputDir, entry.Name()))
+				if readErr == nil && json.Unmarshal(data, &root) == nil && root.Overview != "" && len(root.Tools) == 0 {
+					rootFound = true
+					continue
+				}
+			}
+			return fmt.Errorf("refusing to replace unrecognized output directory: invalid root.json in %s", outputDir)
+		}
+		if !entry.IsDir() {
+			return fmt.Errorf("refusing to replace unrecognized output directory: unexpected file %s", filepath.Join(outputDir, entry.Name()))
+		}
+		providerIndex := filepath.Join(outputDir, entry.Name(), entry.Name()+".json")
+		if info, statErr := os.Lstat(providerIndex); statErr != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to replace unrecognized output directory: missing provider index %s", providerIndex)
+		}
+	}
+	if !rootFound {
+		return fmt.Errorf("refusing to replace unrecognized output directory without root.json: %s", outputDir)
+	}
+	return nil
+}
+
+func validateGeneratedNames(servers []ServerTools) error {
+	serverNames := make(map[string]struct{}, len(servers))
+	foldedServerNames := make(map[string]string, len(servers))
+	rootNameKey := foldGeneratedName("root")
+	for _, server := range servers {
+		if err := validateGeneratedComponent("provider", server.ServerName); err != nil {
+			return err
+		}
+		serverNameKey := foldGeneratedName(server.ServerName)
+		if serverNameKey == rootNameKey {
+			return errors.New("provider name is reserved for the hierarchy root: root.json")
+		}
+		if _, exists := serverNames[server.ServerName]; exists {
+			return fmt.Errorf("duplicate provider name: %s", server.ServerName)
+		}
+		if existing, exists := foldedServerNames[serverNameKey]; exists {
+			return fmt.Errorf("provider name %q has a case-folding collision with %q", server.ServerName, existing)
+		}
+		serverNames[server.ServerName] = struct{}{}
+		foldedServerNames[serverNameKey] = server.ServerName
+
+		toolNames := make(map[string]struct{}, len(server.Tools))
+		foldedToolNames := make(map[string]string, len(server.Tools))
+		for _, tool := range server.Tools {
+			if err := validateGeneratedComponent("tool", tool.Name); err != nil {
+				return fmt.Errorf("provider %s: %w", server.ServerName, err)
+			}
+			toolNameKey := foldGeneratedName(tool.Name)
+			if toolNameKey == rootNameKey {
+				return fmt.Errorf("provider %s: tool name is reserved for the hierarchy root: %s", server.ServerName, tool.Name)
+			}
+			if tool.Name == server.ServerName {
+				return fmt.Errorf("provider %s: tool name collides with provider index: %s", server.ServerName, tool.Name)
+			}
+			if toolNameKey == serverNameKey {
+				return fmt.Errorf("provider %s: tool name %q has a case-folding collision with the provider index", server.ServerName, tool.Name)
+			}
+			if _, exists := toolNames[tool.Name]; exists {
+				return fmt.Errorf("provider %s: duplicate tool name: %s", server.ServerName, tool.Name)
+			}
+			if existing, exists := foldedToolNames[toolNameKey]; exists {
+				return fmt.Errorf("provider %s: tool name %q has a case-folding collision with %q", server.ServerName, tool.Name, existing)
+			}
+			toolNames[tool.Name] = struct{}{}
+			foldedToolNames[toolNameKey] = tool.Name
+		}
+	}
+	return nil
+}
+
+func foldGeneratedName(name string) string {
+	return norm.NFC.String(cases.Fold().String(norm.NFC.String(name)))
+}
+
+func validateGeneratedComponent(kind, name string) error {
+	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) ||
+		filepath.VolumeName(name) != "" || strings.ContainsAny(name, `/\\<>:"|?*`) {
+		return fmt.Errorf("invalid %s name for generated path: %q", kind, name)
+	}
+	for _, char := range name {
+		if char < 32 {
+			return fmt.Errorf("invalid %s name for generated path: control characters are not portable: %q", kind, name)
+		}
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return fmt.Errorf("invalid %s name for generated path: trailing periods and spaces are not portable: %q", kind, name)
+	}
+	if strings.ContainsRune(name, '.') {
+		return fmt.Errorf("invalid %s name for generated path: periods conflict with the hierarchy delimiter: %q", kind, name)
+	}
+	if isReservedWindowsDeviceName(name) {
+		return fmt.Errorf("invalid %s name for generated path: reserved Windows device name: %q", kind, name)
+	}
+	return nil
+}
+
+func isReservedWindowsDeviceName(name string) bool {
+	upperName := strings.ToUpper(name)
+	switch upperName {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+		return true
+	}
+	nameRunes := []rune(upperName)
+	if len(nameRunes) != 4 {
+		return false
+	}
+	prefix := string(nameRunes[:3])
+	if prefix != "COM" && prefix != "LPT" {
+		return false
+	}
+	switch nameRunes[3] {
+	case '1', '2', '3', '4', '5', '6', '7', '8', '9', '\u00b9', '\u00b2', '\u00b3':
+		return true
+	default:
+		return false
+	}
+}
+
+func generatedPath(root string, components ...string) (string, error) {
+	rootPath, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve generation root: %w", err)
+	}
+	parts := append([]string{rootPath}, components...)
+	candidate := filepath.Join(parts...)
+	relative, err := filepath.Rel(rootPath, candidate)
+	if err != nil {
+		return "", fmt.Errorf("failed to verify generated path: %w", err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("generated path escapes staging directory: %s", candidate)
+	}
+	return candidate, nil
+}
+
+func generateStructure(servers []ServerTools, outputDir string) error {
 	// Process each server (skip root.json generation)
 	for _, server := range servers {
 		if err := generateServerStructure(server, outputDir); err != nil {
@@ -28,6 +255,33 @@ func GenerateStructure(servers []ServerTools, outputDir string) error {
 		return fmt.Errorf("failed to generate root.json: %w", err)
 	}
 
+	return nil
+}
+
+func replaceGeneratedDirectory(stagingDir, outputDir string) error {
+	info, err := os.Lstat(outputDir)
+	if os.IsNotExist(err) {
+		return os.Rename(stagingDir, outputDir)
+	} else if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace symlinked output directory: %s", outputDir)
+	}
+
+	backupDir := stagingDir + ".previous"
+	if err := os.Rename(outputDir, backupDir); err != nil {
+		return err
+	}
+	if err := os.Rename(stagingDir, outputDir); err != nil {
+		if restoreErr := os.Rename(backupDir, outputDir); restoreErr != nil {
+			return fmt.Errorf("replace failed: %w; restoring previous output also failed: %v", err, restoreErr)
+		}
+		return err
+	}
+	if err := os.RemoveAll(backupDir); err != nil {
+		return fmt.Errorf("generated output is complete but previous output cleanup failed: %w", err)
+	}
 	return nil
 }
 
@@ -88,7 +342,7 @@ func Regenerate(outputDir string) error {
 	// Create overview text in the format: "Root: N servers, M tools; server1 -> desc1, server2 -> desc2"
 	var overview string
 	if len(childSummaries) == 0 {
-		overview = "MCP Proxy - Hierarchical tool organization system. Use get_tools_in_category to explore available categories and execute_tool to run tools."
+		overview = "Tappet hierarchical tool index. Use get_tools_in_category to explore categories and execute_tool to run tools."
 	} else {
 		overview = fmt.Sprintf("Root: %d servers, %d tools; %s",
 			len(childSummaries), totalTools, joinWithCommas(childSummaries))
@@ -377,7 +631,10 @@ func extractBriefDescription(text string) string {
 // New structure: server_name/server_name.json (parent) + server_name/tool_name/tool_name.json (children)
 func generateServerStructure(server ServerTools, outputDir string) error {
 	// Create server directory: structure/server_name/
-	serverDir := filepath.Join(outputDir, server.ServerName)
+	serverDir, err := generatedPath(outputDir, server.ServerName)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(serverDir, 0755); err != nil {
 		return fmt.Errorf("failed to create server directory: %w", err)
 	}
@@ -386,7 +643,7 @@ func generateServerStructure(server ServerTools, outputDir string) error {
 	var childSummaries []string
 	for _, tool := range server.Tools {
 		// Generate tool file (leaf node) in flat structure
-		if err := generateToolFile(tool, serverDir, server.ServerName); err != nil {
+		if err := generateToolFile(tool, outputDir, server.ServerName); err != nil {
 			return fmt.Errorf("failed to generate tool file for %s: %w", tool.Name, err)
 		}
 
@@ -417,16 +674,22 @@ func generateServerStructure(server ServerTools, outputDir string) error {
 	}
 
 	// Write server JSON file: structure/server_name/server_name.json
-	jsonPath := filepath.Join(serverDir, server.ServerName+".json")
+	jsonPath, err := generatedPath(outputDir, server.ServerName, server.ServerName+".json")
+	if err != nil {
+		return err
+	}
 	return writeNodeToJSON(serverNode, jsonPath)
 }
 
 // generateToolFile creates a JSON file for a single tool in flat structure
 // Structure: parent_dir/tool_name.json
 // This creates a leaf node (has tools, no overview)
-func generateToolFile(tool Tool, parentDir string, serverName string) error {
+func generateToolFile(tool Tool, outputDir string, serverName string) error {
 	// Flat structure: place tool.json directly in parent directory
-	jsonPath := filepath.Join(parentDir, tool.Name+".json")
+	jsonPath, err := generatedPath(outputDir, serverName, tool.Name+".json")
+	if err != nil {
+		return err
+	}
 
 	// Create ToolNode for this tool (leaf node - no overview, only tools)
 	toolNode := ToolNode{
@@ -436,7 +699,7 @@ func generateToolFile(tool Tool, parentDir string, serverName string) error {
 			tool.Name: {
 				Title:        tool.Title,
 				Description:  tool.Description,
-				MapsTo:       tool.Name, // Maps to the actual MCP tool name
+				MapsTo:       tool.Name,  // Maps to the actual MCP tool name
 				Server:       serverName, // The MCP server that provides this tool
 				InputSchema:  tool.InputSchema,
 				OutputSchema: tool.OutputSchema,

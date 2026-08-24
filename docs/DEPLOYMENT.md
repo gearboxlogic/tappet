@@ -1,67 +1,37 @@
 # Deployment
 
-## Prerequisites
-
-The router requires a hierarchy directory structure at `testdata/mcp_hierarchy/` (or custom path). Ensure this is available in your deployment environment.
+Tappet needs its JSON configuration and generated hierarchy at runtime. Downstream stdio provider commands must also exist in the image or host environment.
 
 ## Docker
 
-Run with config and hierarchy mounted:
-
 ```bash
-docker run -d \
-  -p 8080:8080 \
-  -v /path/to/config.json:/config/config.json \
-  -v /path/to/mcp_hierarchy:/app/testdata/mcp_hierarchy \
-  ghcr.io/tbxark/mcp-proxy:latest
+docker run --rm \
+  -p 9090:9090 \
+  -v "$PWD/config.docker.json:/config/config.json:ro" \
+  -v "$PWD/testdata/mcp_hierarchy:/config/hierarchy:ro" \
+  ghcr.io/gearboxlogic/tappet:latest
 ```
 
-Or with remote config:
+The Docker-specific configuration starts a Streamable HTTP server on port `9090` and uses the absolute hierarchy path `/config/hierarchy`. The repository image includes Node.js, `npx`, and `uvx` for configurations that launch those provider commands.
 
-```bash
-docker run -d -p 8080:8080 \
-  -v /path/to/mcp_hierarchy:/app/testdata/mcp_hierarchy \
-  ghcr.io/tbxark/mcp-proxy:latest \
-  --config https://example.com/config.json
-```
+Run `make test-container` to build the image without publishing it, start a temporary container, and verify MCP initialization plus the two-tool outward contract. Set `CONTAINER_ENGINE=podman` to use Podman instead of Docker.
 
-The image includes `npx` and `uvx` for launching MCP servers.
+### Image publication
+
+The manual Docker publishing workflow publishes only to `ghcr.io/gearboxlogic/tappet`. Milestone 0 intentionally retired the inherited optional backup-registry path because Tappet has no documented or supported secondary registry. Restoring secondary publication requires a separate reviewed change with an immutable action pin and credentials scoped to that registry.
 
 ## Docker Compose
 
 ```yaml
 services:
-  mcp-router:
-    image: ghcr.io/tbxark/mcp-proxy:latest
-    pull_policy: always
+  tappet:
+    image: ghcr.io/gearboxlogic/tappet:latest
     volumes:
-      - ./config.json:/config/config.json
-      - ./mcp_hierarchy:/app/testdata/mcp_hierarchy
+      - ./config.docker.json:/config/config.json:ro
+      - ./testdata/mcp_hierarchy:/config/hierarchy:ro
     ports:
-      - "8080:8080"
-    restart: always
+      - "9090:9090"
+    restart: unless-stopped
 ```
 
-## Security
-
-- Use `authTokens` for authentication
-- Set `logEnabled: true` for debugging
-- Ensure hierarchy JSON files are not writable at runtime
-- MCP servers inherit security context from the router process
-
-## Hierarchy Setup
-
-Your deployment must include the hierarchy directory structure:
-
-```
-mcp_hierarchy/
-├── root.json                 (defines meta-tools)
-├── coding_tools/
-│   ├── coding_tools.json
-│   └── serena/
-│       └── serena.json       (MCP server configs here)
-└── web_tools/
-    └── web_tools.json
-```
-
-See [CONFIGURATION.md](CONFIGURATION.md) for hierarchy format details.
+Use `authTokens` for outward HTTP authentication. That does not replace provider-side authorization. Keep hierarchy JSON read-only at runtime, and supply provider credentials through the environment rather than embedding them in hierarchy files.

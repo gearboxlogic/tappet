@@ -1,18 +1,25 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/mark3labs/mcp-go/client"
+	tappetclient "github.com/gearboxlogic/tappet/internal/client"
+	"github.com/gearboxlogic/tappet/internal/config"
+	generator "github.com/gearboxlogic/tappet/structure_generator"
+	mcpclient "github.com/mark3labs/mcp-go/client"
+	mcptransport "github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
-	generator "github.com/voicetreelab/lazy-mcp/structure_generator"
 )
 
 type arrayFlags []string
@@ -28,15 +35,114 @@ func (i *arrayFlags) Set(value string) error {
 
 // Config represents the MCP server configuration
 type Config struct {
-	MCPServers map[string]ServerConfig `json:"mcpServers"`
-	OutputDir  string                  `json:"outputDir,omitempty"`
+	MCPServers map[string]*config.MCPClientConfigV2 `json:"mcpServers"`
+	OutputDir  string                               `json:"outputDir,omitempty"`
 }
 
-// ServerConfig defines how to connect to an MCP server
-type ServerConfig struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env,omitempty"`
+type catalogClient interface {
+	Start(context.Context) error
+	Initialize(context.Context, mcp.InitializeRequest) (*mcp.InitializeResult, error)
+	ListToolsByPage(context.Context, mcp.ListToolsRequest) (*catalogToolsPage, error)
+	Close() error
+}
+
+type catalogToolsPage struct {
+	NextCursor mcp.Cursor        `json:"nextCursor,omitempty"`
+	Tools      []json.RawMessage `json:"tools"`
+}
+
+func (p *catalogToolsPage) UnmarshalJSON(data []byte) error {
+	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
+		return fmt.Errorf("invalid tools/list result: %w", err)
+	}
+
+	var wire struct {
+		NextCursor mcp.Cursor      `json:"nextCursor,omitempty"`
+		Tools      json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	encodedTools := bytes.TrimSpace(wire.Tools)
+	if len(encodedTools) == 0 || bytes.Equal(encodedTools, []byte("null")) {
+		return errors.New(`tools/list result is missing required "tools" array`)
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(encodedTools, &tools); err != nil {
+		return fmt.Errorf(`tools/list result field "tools" must be an array: %w`, err)
+	}
+	p.NextCursor = wire.NextCursor
+	p.Tools = tools
+	return nil
+}
+
+type transportCatalogClient struct {
+	client    *mcpclient.Client
+	requestID atomic.Uint64
+}
+
+func (c *transportCatalogClient) Start(ctx context.Context) error {
+	return c.client.Start(ctx)
+}
+
+func (c *transportCatalogClient) Initialize(ctx context.Context, request mcp.InitializeRequest) (*mcp.InitializeResult, error) {
+	return c.client.Initialize(ctx, request)
+}
+
+func (c *transportCatalogClient) ListToolsByPage(ctx context.Context, request mcp.ListToolsRequest) (*catalogToolsPage, error) {
+	response, err := c.client.GetTransport().SendRequest(ctx, mcptransport.JSONRPCRequest{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		ID:      mcp.NewRequestId(fmt.Sprintf("tappet-inventory-%d", c.requestID.Add(1))),
+		Method:  "tools/list",
+		Params:  request.Params,
+		Header:  request.Header,
+	})
+	if err != nil {
+		return nil, mcptransport.NewError(err)
+	}
+	if response.Error != nil {
+		return nil, response.Error.AsError()
+	}
+
+	var result catalogToolsPage
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode lossless tools/list result: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *transportCatalogClient) Close() error {
+	return c.client.Close()
+}
+
+type catalogConnection struct {
+	client    catalogClient
+	needStart bool
+}
+
+type catalogClientFactory func(string, *config.MCPClientConfigV2) (catalogConnection, error)
+
+const (
+	maxInventoryPages     = 128
+	maxInventoryTools     = 4_096
+	maxInventoryPageBytes = 4 << 20
+	maxInventoryBytes     = 32 << 20
+)
+
+type inventoryLimits struct {
+	pages      int
+	tools      int
+	pageBytes  int
+	totalBytes int
+}
+
+func defaultInventoryLimits() inventoryLimits {
+	return inventoryLimits{
+		pages:      maxInventoryPages,
+		tools:      maxInventoryTools,
+		pageBytes:  maxInventoryPageBytes,
+		totalBytes: maxInventoryBytes,
+	}
 }
 
 func main() {
@@ -85,8 +191,8 @@ func main() {
 				log.Fatalf("Failed to read %s: %v", inputFile, err)
 			}
 
-			var serverTools generator.ServerTools
-			if err := json.Unmarshal(data, &serverTools); err != nil {
+			serverTools, err := decodeServerTools(data)
+			if err != nil {
 				log.Fatalf("Failed to parse %s: %v", inputFile, err)
 			}
 
@@ -144,6 +250,10 @@ func main() {
 
 // fetchFromConfig loads config and fetches tools from all MCP servers
 func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
+	return fetchFromConfigWithFactory(context.Background(), configPath, newCatalogConnection)
+}
+
+func fetchFromConfigWithFactory(ctx context.Context, configPath string, factory catalogClientFactory) ([]generator.ServerTools, error) {
 	// Read config file
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -155,20 +265,26 @@ func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	serverNames := make([]string, 0, len(config.MCPServers))
+	for serverName := range config.MCPServers {
+		serverNames = append(serverNames, serverName)
+	}
+	sort.Strings(serverNames)
 
-	var allServers []generator.ServerTools
+	allServers := make([]generator.ServerTools, 0, len(serverNames))
 
 	// Fetch from each server
-	for serverName, serverConfig := range config.MCPServers {
+	for _, serverName := range serverNames {
+		serverConfig := config.MCPServers[serverName]
+		if serverConfig == nil {
+			return nil, fmt.Errorf("invalid provider config for %s: configuration is null", serverName)
+		}
+		serverConfig = expandProviderConfig(serverConfig)
 		log.Printf("Connecting to MCP server: %s", serverName)
 
-		serverTools, err := fetchToolsFromServer(ctx, serverName, serverConfig)
-
+		serverTools, err := fetchToolsFromServer(ctx, serverName, serverConfig, factory)
 		if err != nil {
-			log.Printf("⚠ Warning: Failed to fetch tools from %s: %v", serverName, err)
-			continue
+			return nil, fmt.Errorf("failed to fetch complete tool inventory from %s: %w", serverName, err)
 		}
 
 		allServers = append(allServers, serverTools)
@@ -178,40 +294,61 @@ func fetchFromConfig(configPath string) ([]generator.ServerTools, error) {
 	return allServers, nil
 }
 
-// fetchToolsFromServer connects to an MCP server and fetches all tools
-func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig) (generator.ServerTools, error) {
-	log.Printf("[%s] Creating stdio client: %s %v", name, config.Command, config.Args)
-
-	// Expand environment variables in args
-	expandedArgs := make([]string, len(config.Args))
-	for i, arg := range config.Args {
-		expandedArgs[i] = os.ExpandEnv(arg)
+func expandProviderConfig(providerConfig *config.MCPClientConfigV2) *config.MCPClientConfigV2 {
+	expanded := *providerConfig
+	expanded.Command = os.ExpandEnv(providerConfig.Command)
+	expanded.URL = os.ExpandEnv(providerConfig.URL)
+	expanded.Args = make([]string, len(providerConfig.Args))
+	for i, arg := range providerConfig.Args {
+		expanded.Args[i] = os.ExpandEnv(arg)
 	}
+	if providerConfig.Env != nil {
+		expanded.Env = make(map[string]string, len(providerConfig.Env))
+		for name, value := range providerConfig.Env {
+			expanded.Env[name] = os.ExpandEnv(value)
+		}
+	}
+	if providerConfig.Headers != nil {
+		expanded.Headers = make(map[string]string, len(providerConfig.Headers))
+		for name, value := range providerConfig.Headers {
+			expanded.Headers[name] = os.ExpandEnv(value)
+		}
+	}
+	return &expanded
+}
 
-	// Create MCP client
-	mcpClient, err := client.NewStdioMCPClient(config.Command, []string{}, expandedArgs...)
+// fetchToolsFromServer connects to an MCP server and fetches all tools
+func fetchToolsFromServer(ctx context.Context, name string, providerConfig *config.MCPClientConfigV2, factory catalogClientFactory) (generator.ServerTools, error) {
+	return fetchToolsFromServerWithLimits(ctx, name, providerConfig, factory, defaultInventoryLimits())
+}
+
+func fetchToolsFromServerWithLimits(ctx context.Context, name string, providerConfig *config.MCPClientConfigV2, factory catalogClientFactory, limits inventoryLimits) (generator.ServerTools, error) {
+	connection, err := factory(name, providerConfig)
 	if err != nil {
 		return generator.ServerTools{}, fmt.Errorf("failed to create client: %w", err)
 	}
-	// Note: We intentionally don't close the client here because stdio cleanup can hang.
-	// The process will terminate via os.Exit(0) in main(), which cleans up all resources.
+	defer closeCatalogClientAsync(name, connection.client)
 
 	log.Printf("[%s] Client created, initializing...", name)
 
-	// Create our own context with timeout (don't use the passed ctx)
-	localCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	localCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if connection.needStart {
+		if err := connection.client.Start(localCtx); err != nil {
+			return generator.ServerTools{}, fmt.Errorf("failed to start client: %w", err)
+		}
+	}
 
 	// Initialize connection
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "structure-generator",
-		Version: "1.0.0",
+		Name:    "tappet-structure-generator",
+		Version: "0.1.0",
 	}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
-	if _, err := mcpClient.Initialize(localCtx, initRequest); err != nil {
+	if _, err := connection.client.Initialize(localCtx, initRequest); err != nil {
 		return generator.ServerTools{}, fmt.Errorf("failed to initialize: %w", err)
 	}
 
@@ -220,21 +357,68 @@ func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig)
 	// Fetch all tools
 	var allTools []generator.Tool
 	toolsRequest := mcp.ListToolsRequest{}
+	seenCursors := make(map[mcp.Cursor]struct{})
+	pageCount := 0
+	totalBytes := 2 // JSON array brackets.
 
 	log.Printf("[%s] Listing tools...", name)
-	toolsResult, err := mcpClient.ListTools(localCtx, toolsRequest)
-	if err != nil {
-		return generator.ServerTools{}, fmt.Errorf("failed to list tools: %w", err)
-	}
-
-	// Convert mcp.Tool to generator.Tool
-	for _, mcpTool := range toolsResult.Tools {
-		tool := generator.Tool{
-			Name:        mcpTool.Name,
-			Description: mcpTool.Description,
-			InputSchema: convertToolInputSchema(mcpTool.InputSchema),
+	for {
+		if pageCount >= limits.pages {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory page limit exceeded: maximum %d pages", limits.pages)
 		}
-		allTools = append(allTools, tool)
+		pageCount++
+
+		toolsResult, err := connection.client.ListToolsByPage(localCtx, toolsRequest)
+		if err != nil {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: %w", err)
+		}
+		if toolsResult == nil {
+			return generator.ServerTools{}, errors.New("failed to list tools: provider returned no tools/list result")
+		}
+		if len(toolsResult.Tools) > limits.tools-len(allTools) {
+			return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory tool limit exceeded: maximum %d tools", limits.tools)
+		}
+		if toolsResult.NextCursor != "" {
+			if _, seen := seenCursors[toolsResult.NextCursor]; seen {
+				return generator.ServerTools{}, fmt.Errorf("failed to list tools: repeated pagination cursor %q", toolsResult.NextCursor)
+			}
+		}
+
+		pageTools := make([]generator.Tool, 0, len(toolsResult.Tools))
+		pageBytes := 2 // JSON array brackets.
+		for toolIndex, rawTool := range toolsResult.Tools {
+			tool, err := convertTool(rawTool)
+			if err != nil {
+				return generator.ServerTools{}, fmt.Errorf("failed to preserve metadata for tool at index %d: %w", toolIndex, err)
+			}
+			encodedTool, err := json.Marshal(tool)
+			if err != nil {
+				return generator.ServerTools{}, fmt.Errorf("failed to measure metadata for tool %s: %w", tool.Name, err)
+			}
+			pageSeparator := 0
+			if len(pageTools) > 0 {
+				pageSeparator = 1
+			}
+			if exceedsInventoryLimit(pageBytes, len(encodedTool)+pageSeparator, limits.pageBytes) {
+				return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory page byte limit exceeded: maximum %d encoded bytes", limits.pageBytes)
+			}
+			totalSeparator := 0
+			if len(allTools)+len(pageTools) > 0 {
+				totalSeparator = 1
+			}
+			if exceedsInventoryLimit(totalBytes, len(encodedTool)+totalSeparator, limits.totalBytes) {
+				return generator.ServerTools{}, fmt.Errorf("failed to list tools: inventory byte limit exceeded: maximum %d encoded bytes", limits.totalBytes)
+			}
+			pageBytes += len(encodedTool) + pageSeparator
+			totalBytes += len(encodedTool) + totalSeparator
+			pageTools = append(pageTools, tool)
+		}
+		allTools = append(allTools, pageTools...)
+		if toolsResult.NextCursor == "" {
+			break
+		}
+		seenCursors[toolsResult.NextCursor] = struct{}{}
+		toolsRequest.Params.Cursor = toolsResult.NextCursor
 	}
 
 	return generator.ServerTools{
@@ -243,19 +427,73 @@ func fetchToolsFromServer(ctx context.Context, name string, config ServerConfig)
 	}, nil
 }
 
-// convertToolInputSchema converts mcp.ToolInputSchema to map[string]interface{}
-func convertToolInputSchema(schema mcp.ToolInputSchema) map[string]interface{} {
-	result := make(map[string]interface{})
+func exceedsInventoryLimit(current, additional, limit int) bool {
+	return current > limit || additional > limit-current
+}
 
-	if schema.Type != "" {
-		result["type"] = schema.Type
+func newCatalogConnection(name string, providerConfig *config.MCPClientConfigV2) (catalogConnection, error) {
+	mcpClient, err := tappetclient.NewMCPClientWithResponseLimit(name, providerConfig, maxInventoryPageBytes)
+	if err != nil {
+		return catalogConnection{}, err
 	}
-	if len(schema.Properties) > 0 {
-		result["properties"] = schema.Properties
+	return catalogConnection{
+		client:    &transportCatalogClient{client: mcpClient.GetClient()},
+		needStart: mcpClient.NeedManualStart(),
+	}, nil
+}
+
+func closeCatalogClientAsync(name string, catalog catalogClient) {
+	go func() {
+		if err := catalog.Close(); err != nil {
+			log.Printf("[%s] Failed to close catalog client: %v", name, err)
+		}
+	}()
+}
+
+func convertTool(data json.RawMessage) (generator.Tool, error) {
+	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
+		return generator.Tool{}, fmt.Errorf("invalid tool metadata: %w", err)
 	}
-	if len(schema.Required) > 0 {
-		result["required"] = schema.Required
+	var fields struct {
+		Name         string                 `json:"name"`
+		Title        string                 `json:"title"`
+		Description  string                 `json:"description"`
+		InputSchema  map[string]interface{} `json:"inputSchema"`
+		OutputSchema map[string]interface{} `json:"outputSchema"`
+		Annotations  map[string]interface{} `json:"annotations"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&fields); err != nil {
+		return generator.Tool{}, err
+	}
+	if fields.InputSchema == nil {
+		return generator.Tool{}, fmt.Errorf("tool %q is missing required object inputSchema", fields.Name)
+	}
+	title := fields.Title
+	if title == "" {
+		title, _ = fields.Annotations["title"].(string)
+	}
+	return generator.Tool{
+		Name:         fields.Name,
+		Title:        title,
+		Description:  fields.Description,
+		InputSchema:  fields.InputSchema,
+		OutputSchema: fields.OutputSchema,
+		Annotations:  fields.Annotations,
+	}, nil
+}
+
+func decodeServerTools(data []byte) (generator.ServerTools, error) {
+	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
+		return generator.ServerTools{}, fmt.Errorf("invalid pre-fetched server metadata: %w", err)
 	}
 
-	return result
+	var serverTools generator.ServerTools
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&serverTools); err != nil {
+		return generator.ServerTools{}, err
+	}
+	return serverTools, nil
 }

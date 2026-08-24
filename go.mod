@@ -1,4 +1,4 @@
-module github.com/voicetreelab/lazy-mcp
+module github.com/gearboxlogic/tappet
 
 go 1.24.0
 
@@ -7,6 +7,7 @@ require (
 	github.com/go-sphere/confstore v0.0.4
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/stretchr/testify v1.10.0
+	golang.org/x/text v0.28.0
 )
 
 require (

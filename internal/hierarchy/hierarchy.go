@@ -3,6 +3,7 @@ package hierarchy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gearboxlogic/tappet/internal/client"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/voicetreelab/lazy-mcp/internal/client"
-	"github.com/voicetreelab/lazy-mcp/internal/config"
 )
 
 // HierarchyNode represents a node in the tool hierarchy
@@ -410,8 +411,13 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 		return nil, fmt.Errorf("no MCP server configured for tool: %s", toolPath)
 	}
 
+	// Bound the complete invocation, including lazy provider startup,
+	// initialization, same-provider queuing, and the downstream call.
+	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Get or load the MCP client for this server
-	client, err := registry.GetOrLoadServer(ctx, serverName)
+	client, err := registry.GetOrLoadServer(toolCtx, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MCP client: %w", err)
 	}
@@ -424,18 +430,13 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 
 	log.Printf("Executing tool: hierarchy_path=%s, server=%s, tool=%s", toolPath, serverName, actualToolName)
 
-	// Create a context with 30-second timeout for tool execution
-	// (increased from 15s to account for queuing time when serializing requests)
-	// Note: We create the timeout BEFORE acquiring the lock to enforce a total deadline
-	// for the operation. If we waited for the lock first, a client could hang indefinitely.
-	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	// Serialize tool calls to the same server to prevent concurrent stdio access.
 	// Stdio is a single-channel transport that cannot handle interleaved messages.
-	// See: https://github.com/voicetreelab/lazy-mcp/issues/8
+	// This protects mcp-go v0.43.2 stdio writes, which are not framed by a transport write mutex.
 	mutex := registry.GetClientMutex(serverName)
-	mutex.Lock()
+	if err := mutex.LockContext(toolCtx); err != nil {
+		return nil, fmt.Errorf("failed to wait for provider %s: %w", serverName, err)
+	}
 	defer mutex.Unlock()
 
 	// Call the tool on the actual MCP server
@@ -443,7 +444,7 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	callRequest.Params.Name = actualToolName
 	callRequest.Params.Arguments = arguments
 
-	result, err := client.GetClient().CallTool(toolCtx, callRequest)
+	result, err := client.CallTool(toolCtx, callRequest)
 	if err != nil {
 		// Include inputSchema in error message to help LLMs self-correct parameter mistakes
 		if toolDef.InputSchema != nil {
@@ -472,18 +473,61 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 
 // ServerRegistry manages MCP client connections
 type ServerRegistry struct {
-	clients       map[string]*client.Client
-	clientMutex   map[string]*sync.Mutex // Per-client mutex for serializing tool calls
+	clients       map[string]ProviderClient
+	clientLoads   map[string]*providerLoad
+	clientMutex   map[string]*ClientMutex // Per-client mutex for serializing tool calls
 	serverConfigs map[string]*config.MCPClientConfigV2
-	mu            sync.RWMutex
+	clientFactory ProviderClientFactory
+	lifecycleCtx  context.Context
+	cancel        context.CancelFunc
+	mu            sync.Mutex
+	closed        bool
 }
+
+type providerLoad struct {
+	done                     chan struct{}
+	client                   ProviderClient
+	err                      error
+	initiatingCallerCanceled bool
+}
+
+var errProviderLoadCanceledByInitiator = errors.New("provider load canceled by initiating caller")
+
+func markProviderLoadCanceledByInitiator(err error) error {
+	return fmt.Errorf("%w: %w", errProviderLoadCanceledByInitiator, err)
+}
+
+// ProviderClient is the part of a downstream MCP client used by the hierarchy.
+type ProviderClient interface {
+	CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	Close() error
+	CloseFailed(context.Context) error
+}
+
+const failedProviderCleanupTimeout = 2 * time.Second
+
+// ProviderClientFactory starts and initializes one downstream MCP client.
+type ProviderClientFactory func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error)
 
 // NewServerRegistry creates a new server registry with server configurations
 func NewServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2) *ServerRegistry {
+	registry := newServerRegistry(serverConfigs, nil)
+	registry.clientFactory = func(ctx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
+		return newProviderClient(ctx, registry.lifecycleCtx, serverName, cfg)
+	}
+	return registry
+}
+
+func newServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2, factory ProviderClientFactory) *ServerRegistry {
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	return &ServerRegistry{
-		clients:       make(map[string]*client.Client),
-		clientMutex:   make(map[string]*sync.Mutex),
+		clients:       make(map[string]ProviderClient),
+		clientLoads:   make(map[string]*providerLoad),
+		clientMutex:   make(map[string]*ClientMutex),
 		serverConfigs: serverConfigs,
+		clientFactory: factory,
+		lifecycleCtx:  lifecycleCtx,
+		cancel:        cancel,
 	}
 }
 
@@ -491,7 +535,7 @@ func NewServerRegistry(serverConfigs map[string]*config.MCPClientConfigV2) *Serv
 // This mutex serializes tool calls to prevent concurrent stdio access.
 // Note: This map grows with the number of unique servers accessed. Since the set of
 // servers is bounded by the configuration/hierarchy, this is not a memory leak.
-func (r *ServerRegistry) GetClientMutex(serverName string) *sync.Mutex {
+func (r *ServerRegistry) GetClientMutex(serverName string) *ClientMutex {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -499,86 +543,273 @@ func (r *ServerRegistry) GetClientMutex(serverName string) *sync.Mutex {
 		return m
 	}
 
-	m := &sync.Mutex{}
+	m := NewClientMutex()
 	r.clientMutex[serverName] = m
 	return m
 }
 
+// ClientMutex serializes calls while allowing a queued call to stop waiting
+// when its invocation context expires.
+type ClientMutex struct {
+	token chan struct{}
+}
+
+func NewClientMutex() *ClientMutex {
+	mutex := &ClientMutex{token: make(chan struct{}, 1)}
+	mutex.token <- struct{}{}
+	return mutex
+}
+
+func (m *ClientMutex) Lock() {
+	<-m.token
+}
+
+func (m *ClientMutex) LockContext(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.token:
+		if err := ctx.Err(); err != nil {
+			m.Unlock()
+			return err
+		}
+		return nil
+	}
+}
+
+func (m *ClientMutex) Unlock() {
+	m.token <- struct{}{}
+}
+
 // GetOrLoadServer gets an existing client or creates and initializes a new one
 // This implements lazy loading - servers are only started when first accessed
-func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string) (*client.Client, error) {
-	// First check with read lock
-	r.mu.RLock()
-	if client, exists := r.clients[serverName]; exists {
-		r.mu.RUnlock()
-		return client, nil
+func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string) (ProviderClient, error) {
+	for {
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return nil, errors.New("server registry is closed")
+		}
+		if client, exists := r.clients[serverName]; exists {
+			r.mu.Unlock()
+			return client, nil
+		}
+		if load, exists := r.clientLoads[serverName]; exists {
+			r.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-load.done:
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if load.initiatingCallerCanceled {
+					continue
+				}
+				return load.client, load.err
+			}
+		}
+
+		cfg, exists := r.serverConfigs[serverName]
+		if !exists {
+			r.mu.Unlock()
+			return nil, fmt.Errorf("server config not found: %s", serverName)
+		}
+		load := &providerLoad{done: make(chan struct{})}
+		r.clientLoads[serverName] = load
+		r.mu.Unlock()
+
+		mcpClient, err := r.clientFactory(ctx, serverName, cfg)
+		initiatingCallerCanceled := errors.Is(err, errProviderLoadCanceledByInitiator)
+
+		r.mu.Lock()
+		if err == nil && r.closed {
+			err = errors.New("server registry closed while provider was starting")
+		}
+		if err == nil {
+			r.clients[serverName] = mcpClient
+			load.client = mcpClient
+		}
+		load.err = err
+		load.initiatingCallerCanceled = initiatingCallerCanceled
+		delete(r.clientLoads, serverName)
+		close(load.done)
+		r.mu.Unlock()
+
+		if err != nil && mcpClient != nil {
+			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
+			return nil, err
+		}
+		return mcpClient, err
 	}
-	r.mu.RUnlock()
+}
 
-	// Need to create, use write lock
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Check again in case another goroutine created it
-	if client, exists := r.clients[serverName]; exists {
-		return client, nil
-	}
-
-	// Look up the server config
-	cfg, exists := r.serverConfigs[serverName]
-	if !exists {
-		return nil, fmt.Errorf("server config not found: %s", serverName)
-	}
-
-	// Create the MCP client
+func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg *config.MCPClientConfigV2) (ProviderClient, error) {
 	mcpClient, err := client.NewMCPClient(serverName, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
-	// Start the client if needed
+	var startCtx *providerStartContext
 	if mcpClient.NeedManualStart() {
-		err := mcpClient.GetClient().Start(ctx)
-		if err != nil {
+		startCtx = newProviderStartContext(ctx, lifecycleCtx)
+		if err := mcpClient.GetClient().Start(startCtx); err != nil {
+			startCtx.abort()
+			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
+			}
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
+		if ctx.Err() != nil {
+			startCtx.abort()
+			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
+			return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
+		}
+		startCtx.detach()
 	}
 
-	// Initialize the client
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{Name: "mcp-proxy-recursive"}
+	initRequest.Params.ClientInfo = mcp.Implementation{Name: "tappet"}
 	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
 
-	_, err = mcpClient.GetClient().Initialize(ctx, initRequest)
-	if err != nil {
+	if _, err := mcpClient.GetClient().Initialize(ctx, initRequest); err != nil {
+		if startCtx != nil {
+			startCtx.abort()
+		}
+		closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return nil, fmt.Errorf("failed to initialize MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
+		}
 		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
 
-	log.Printf("Created and initialized MCP client for server: %s", serverName)
-
-	// Store the client
-	r.clients[serverName] = mcpClient
-
-	// Start ping task if needed
+	log.Printf("Created and initialized MCP client for provider: %s", serverName)
 	if mcpClient.NeedPing() {
-		go mcpClient.StartPingTask(ctx)
+		go mcpClient.StartPingTask(lifecycleCtx)
 	}
-
 	return mcpClient, nil
+}
+
+// providerStartContext observes the invocation deadline until Start succeeds.
+// After detach, the stable Done channel follows only the registry lifecycle,
+// so an established SSE stream outlives the request that started it.
+type providerStartContext struct {
+	startup       context.Context
+	lifecycle     context.Context
+	done          chan struct{}
+	mu            sync.Mutex
+	err           error
+	detached      bool
+	stopStartup   func() bool
+	stopLifecycle func() bool
+}
+
+func newProviderStartContext(startup, lifecycle context.Context) *providerStartContext {
+	ctx := &providerStartContext{
+		startup:   startup,
+		lifecycle: lifecycle,
+		done:      make(chan struct{}),
+	}
+	ctx.stopStartup = context.AfterFunc(startup, func() {
+		ctx.cancelStartup(startup.Err())
+	})
+	ctx.stopLifecycle = context.AfterFunc(lifecycle, func() {
+		ctx.cancel(lifecycle.Err())
+	})
+	return ctx
+}
+
+func (c *providerStartContext) Deadline() (time.Time, bool) {
+	c.mu.Lock()
+	detached := c.detached
+	c.mu.Unlock()
+	if detached {
+		return c.lifecycle.Deadline()
+	}
+	return c.startup.Deadline()
+}
+
+func (c *providerStartContext) Done() <-chan struct{} { return c.done }
+
+func (c *providerStartContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *providerStartContext) Value(key any) any {
+	c.mu.Lock()
+	detached := c.detached
+	c.mu.Unlock()
+	if detached {
+		return c.lifecycle.Value(key)
+	}
+	return c.startup.Value(key)
+}
+
+func (c *providerStartContext) detach() {
+	c.mu.Lock()
+	c.detached = true
+	c.mu.Unlock()
+	c.stopStartup()
+}
+
+func (c *providerStartContext) abort() {
+	c.stopStartup()
+	c.stopLifecycle()
+	c.cancel(context.Canceled)
+}
+
+func (c *providerStartContext) cancelStartup(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.detached || c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
+}
+
+func (c *providerStartContext) cancel(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
+}
+
+// closeFailedProvider uses the provider's failure-specific, context-aware
+// cleanup path. Stdio implementations kill and reap their child before return.
+func closeFailedProvider(serverName string, provider ProviderClient, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := provider.CloseFailed(ctx); err != nil {
+		log.Printf("Failed to close MCP client for provider %s after initialization failure: %v", serverName, err)
+	}
 }
 
 // Close closes all clients in the registry
 func (r *ServerRegistry) Close() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
+	r.cancel()
 
-	for name, client := range r.clients {
+	clients := r.clients
+	r.clients = make(map[string]ProviderClient)
+	r.clientLoads = make(map[string]*providerLoad)
+	r.clientMutex = make(map[string]*ClientMutex)
+	r.mu.Unlock()
+
+	for name, client := range clients {
 		log.Printf("Closing MCP client: %s", name)
 		_ = client.Close()
 	}
-
-	// Clear the clients and mutex maps
-	r.clients = make(map[string]*client.Client)
-	r.clientMutex = make(map[string]*sync.Mutex)
 }

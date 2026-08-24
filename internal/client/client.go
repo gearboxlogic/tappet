@@ -2,302 +2,146 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
+	"os"
+	"os/exec"
 	"sync"
 	"time"
 
-	"github.com/voicetreelab/lazy-mcp/internal/config"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 )
 
+// Client adapts the configured downstream MCP transports used by the current
+// hierarchy broker. Provider startup and lifetime are owned by ServerRegistry.
 type Client struct {
 	name            string
 	needPing        bool
 	needManualStart bool
 	client          *client.Client
-	options         *config.OptionsV2
-	// Lazy loading fields
-	mcpServer     *server.MCPServer
-	lazyTools     []mcp.Tool
-	lazyPrompts   []mcp.Prompt
-	lazyResources []mcp.Resource
-	lazyTemplates []mcp.ResourceTemplate
-	activateOnce  sync.Once
-	activated     bool
+	closeFailed     func(context.Context) error
 }
 
-func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) {
-	clientInfo, pErr := config.ParseMCPClientConfigV2(conf)
-	if pErr != nil {
-		return nil, pErr
-	}
-	switch v := clientInfo.(type) {
-	case *config.StdioMCPClientConfig:
-		envs := make([]string, 0, len(v.Env))
-		for kk, vv := range v.Env {
-			envs = append(envs, fmt.Sprintf("%s=%s", kk, vv))
-		}
-		mcpClient, err := client.NewStdioMCPClient(v.Command, envs, v.Args...)
-		if err != nil {
-			return nil, err
-		}
+const (
+	providerPingInterval = 30 * time.Second
+	providerPingTimeout  = 10 * time.Second
+)
 
+func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) {
+	return newMCPClient(name, conf, 0)
+}
+
+// NewMCPClientWithResponseLimit creates a client whose transport rejects each
+// downstream response frame or SSE event larger than maxResponseBytes before
+// JSON decoding.
+func NewMCPClientWithResponseLimit(name string, conf *config.MCPClientConfigV2, maxResponseBytes int64) (*Client, error) {
+	if maxResponseBytes <= 0 {
+		return nil, errors.New("maximum response bytes must be positive")
+	}
+	return newMCPClient(name, conf, maxResponseBytes)
+}
+
+func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes int64) (*Client, error) {
+	clientInfo, err := config.ParseMCPClientConfigV2(conf)
+	if err != nil {
+		return nil, err
+	}
+	switch value := clientInfo.(type) {
+	case *config.StdioMCPClientConfig:
+		envs := make([]string, 0, len(value.Env))
+		for key, val := range value.Env {
+			envs = append(envs, fmt.Sprintf("%s=%s", key, val))
+		}
+		if maxResponseBytes > 0 {
+			stdioTransport := newLimitedStdioTransport(value.Command, envs, value.Args, maxResponseBytes)
+			return &Client{
+				name:            name,
+				needManualStart: true,
+				client:          client.NewClient(newResponseValidatingTransport(stdioTransport, stdioTransport.validation)),
+				closeFailed:     stdioTransport.CloseFailed,
+			}, nil
+		}
+		managed := &managedCommand{}
+		stdioTransport := transport.NewStdioWithOptions(value.Command, envs, value.Args, transport.WithCommandFunc(managed.command))
 		return &Client{
-			name:    name,
-			client:  mcpClient,
-			options: conf.Options,
+			name:            name,
+			needManualStart: true,
+			client:          client.NewClient(stdioTransport),
+			closeFailed:     managed.terminate,
 		}, nil
+
 	case *config.SSEMCPClientConfig:
 		var options []transport.ClientOption
-		if len(v.Headers) > 0 {
-			options = append(options, client.WithHeaders(v.Headers))
+		var validation *responseValidation
+		if maxResponseBytes > 0 {
+			validation = newResponseValidation()
+			options = append(options, client.WithHTTPClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, 0, maxResponseBytes, validation)))
 		}
-		mcpClient, err := client.NewSSEMCPClient(v.URL, options...)
+		if len(value.Headers) > 0 {
+			options = append(options, client.WithHeaders(value.Headers))
+		}
+		sseTransport, err := transport.NewSSE(value.URL, options...)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create SSE transport: %w", err)
+		}
+		var mcpClient *client.Client
+		if validation != nil {
+			mcpClient = client.NewClient(newResponseValidatingTransport(sseTransport, validation))
+		} else {
+			mcpClient = client.NewClient(sseTransport)
 		}
 		return &Client{
 			name:            name,
 			needPing:        true,
 			needManualStart: true,
 			client:          mcpClient,
-			options:         conf.Options,
+			closeFailed:     func(context.Context) error { return mcpClient.Close() },
 		}, nil
+
 	case *config.StreamableMCPClientConfig:
 		var options []transport.StreamableHTTPCOption
-		if len(v.Headers) > 0 {
-			options = append(options, transport.WithHTTPHeaders(v.Headers))
+		var validation *responseValidation
+		if maxResponseBytes > 0 {
+			validation = newResponseValidation()
+			options = append(options, transport.WithHTTPBasicClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, value.Timeout, maxResponseBytes, validation)))
 		}
-		if v.Timeout > 0 {
-			options = append(options, transport.WithHTTPTimeout(v.Timeout))
+		if len(value.Headers) > 0 {
+			options = append(options, transport.WithHTTPHeaders(value.Headers))
 		}
-		mcpClient, err := client.NewStreamableHttpClient(v.URL, options...)
+		if value.Timeout > 0 && maxResponseBytes == 0 {
+			options = append(options, transport.WithHTTPTimeout(value.Timeout))
+		}
+		streamableTransport, err := transport.NewStreamableHTTP(value.URL, options...)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create SSE transport: %w", err)
+		}
+		var mcpClient *client.Client
+		if validation != nil {
+			mcpClient = client.NewClient(newResponseValidatingTransport(streamableTransport, validation))
+		} else {
+			mcpClient = client.NewClient(streamableTransport)
 		}
 		return &Client{
 			name:            name,
 			needPing:        true,
 			needManualStart: true,
 			client:          mcpClient,
-			options:         conf.Options,
+			closeFailed:     func(context.Context) error { return mcpClient.Close() },
 		}, nil
 	}
 	return nil, errors.New("invalid client type")
 }
 
-func (c *Client) AddToMCPServer(ctx context.Context, clientInfo mcp.Implementation, mcpServer *server.MCPServer) error {
-	// Store mcpServer reference for later activation
-	c.mcpServer = mcpServer
-
-	if c.needManualStart {
-		err := c.client.Start(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	initRequest := mcp.InitializeRequest{}
-	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = clientInfo
-	initRequest.Params.Capabilities = mcp.ClientCapabilities{
-		Experimental: make(map[string]interface{}),
-		Roots:        nil,
-		Sampling:     nil,
-	}
-	_, err := c.client.Initialize(ctx, initRequest)
-	if err != nil {
-		return err
-	}
-	log.Printf("<%s> Successfully initialized MCP client", c.name)
-
-	// Check if lazy loading is enabled
-	if c.options != nil && c.options.LazyLoad.OrElse(false) {
-		// Lazy loading mode: store tools/prompts/resources without registering them
-		err = c.storeToolsForLazyLoad(ctx)
-		if err != nil {
-			return err
-		}
-		_ = c.storePromptsForLazyLoad(ctx)
-		_ = c.storeResourcesForLazyLoad(ctx)
-		_ = c.storeResourceTemplatesForLazyLoad(ctx)
-
-		// Register the meta-tool for activation
-		c.registerMetaTool()
-	} else {
-		// Normal mode: register everything immediately
-		err = c.addToolsToServer(ctx, mcpServer)
-		if err != nil {
-			return err
-		}
-		_ = c.addPromptsToServer(ctx, mcpServer)
-		_ = c.addResourcesToServer(ctx, mcpServer)
-		_ = c.addResourceTemplatesToServer(ctx, mcpServer)
-	}
-
-	if c.needPing {
-		go c.startPingTask(ctx)
-	}
-	return nil
-}
-
-// activateTools is called when the meta-tool is invoked to load all real tools
-func (c *Client) activateTools(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	var activationErr error
-	var toolCount, promptCount, resourceCount, templateCount int
-
-	c.activateOnce.Do(func() {
-		log.Printf("<%s> Activating lazy-loaded tools, prompts, and resources", c.name)
-
-		// Register all stored tools
-		toolCount = 0
-		for _, tool := range c.lazyTools {
-			log.Printf("<%s> Adding tool %s", c.name, tool.Name)
-			c.mcpServer.AddTool(tool, c.client.CallTool)
-			toolCount++
-		}
-
-		// Register all stored prompts
-		promptCount = 0
-		for _, prompt := range c.lazyPrompts {
-			log.Printf("<%s> Adding prompt %s", c.name, prompt.Name)
-			c.mcpServer.AddPrompt(prompt, c.client.GetPrompt)
-			promptCount++
-		}
-
-		// Register all stored resources
-		resourceCount = 0
-		for _, resource := range c.lazyResources {
-			log.Printf("<%s> Adding resource %s", c.name, resource.Name)
-			c.mcpServer.AddResource(resource, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-				readResource, e := c.client.ReadResource(ctx, request)
-				if e != nil {
-					return nil, e
-				}
-				return readResource.Contents, nil
-			})
-			resourceCount++
-		}
-
-		// Register all stored resource templates
-		templateCount = 0
-		for _, template := range c.lazyTemplates {
-			log.Printf("<%s> Adding resource template %s", c.name, template.Name)
-			c.mcpServer.AddResourceTemplate(template, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-				readResource, e := c.client.ReadResource(ctx, request)
-				if e != nil {
-					return nil, e
-				}
-				return readResource.Contents, nil
-			})
-			templateCount++
-		}
-
-		// Clear the lazy storage to prevent double registration
-		c.lazyTools = nil
-		c.lazyPrompts = nil
-		c.lazyResources = nil
-		c.lazyTemplates = nil
-		c.activated = true
-
-		log.Printf("<%s> Activation complete: %d tools, %d prompts, %d resources, %d templates",
-			c.name, toolCount, promptCount, resourceCount, templateCount)
-	})
-
-	if activationErr != nil {
-		return nil, activationErr
-	}
-
-	// Return success response
-	response := map[string]interface{}{
-		"activated":      true,
-		"server":         c.name,
-		"toolCount":      toolCount,
-		"promptCount":    promptCount,
-		"resourceCount":  resourceCount,
-		"templateCount":  templateCount,
-	}
-
-	jsonBytes, err := json.Marshal(response)
-	if err != nil {
-		return nil, err
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.NewTextContent(string(jsonBytes)),
-		},
-	}, nil
-}
-
-// registerMetaTool creates and registers the activation meta-tool
-func (c *Client) registerMetaTool() {
-	metaToolName := fmt.Sprintf("activate_%s", c.name)
-
-	// Build description with server-specific context
-	var description string
-	switch c.name {
-	case "serena":
-		description = "Activate Serena MCP server. Provides semantic code operations, symbol finding, file editing, and code analysis tools. "
-	case "playwright":
-		description = "Activate Playwright MCP server. Provides browser automation, web scraping, screenshots, and web interaction tools. "
-	default:
-		description = fmt.Sprintf("Activate and load all tools from the %s MCP server. ", c.name)
-	}
-
-	// Add counts of what will be loaded
-	description += fmt.Sprintf("This will load %d tools", len(c.lazyTools))
-	if len(c.lazyPrompts) > 0 {
-		description += fmt.Sprintf(", %d prompts", len(c.lazyPrompts))
-	}
-	if len(c.lazyResources) > 0 {
-		description += fmt.Sprintf(", %d resources", len(c.lazyResources))
-	}
-	if len(c.lazyTemplates) > 0 {
-		description += fmt.Sprintf(", %d resource templates", len(c.lazyTemplates))
-	}
-	description += "."
-
-	// Add hints about what this server provides based on tool names
-	if len(c.lazyTools) > 0 {
-		description += " Available tools include: "
-		toolNames := make([]string, 0, 5)
-		for i, tool := range c.lazyTools {
-			if i < 5 {
-				toolNames = append(toolNames, tool.Name)
-			} else {
-				break
-			}
-		}
-		description += strings.Join(toolNames, ", ")
-		if len(c.lazyTools) > 5 {
-			description += fmt.Sprintf(" and %d more", len(c.lazyTools)-5)
-		}
-		description += "."
-	}
-
-	metaTool := mcp.Tool{
-		Name:        metaToolName,
-		Description: description,
-		InputSchema: mcp.ToolInputSchema{
-			Type:       "object",
-			Properties: map[string]interface{}{},
-		},
-	}
-
-	log.Printf("<%s> Registering meta-tool: %s", c.name, metaToolName)
-	c.mcpServer.AddTool(metaTool, c.activateTools)
-}
-
 func (c *Client) startPingTask(ctx context.Context) {
-	interval := 30 * time.Second
+	c.runPingTask(ctx, providerPingInterval, providerPingTimeout, c.client.Ping)
+}
+
+func (c *Client) runPingTask(ctx context.Context, interval, timeout time.Duration, ping func(context.Context) error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -308,10 +152,14 @@ func (c *Client) startPingTask(ctx context.Context) {
 			log.Printf("<%s> Context done, stopping ping", c.name)
 			return
 		case <-ticker.C:
-			if err := c.client.Ping(ctx); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return
-				}
+			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := ping(pingCtx)
+			cancel()
+			if ctx.Err() != nil {
+				log.Printf("<%s> Context done, stopping ping", c.name)
+				return
+			}
+			if err != nil {
 				failCount++
 				log.Printf("<%s> MCP Ping failed: %v (count=%d)", c.name, err, failCount)
 			} else if failCount > 0 {
@@ -322,274 +170,6 @@ func (c *Client) startPingTask(ctx context.Context) {
 	}
 }
 
-func (c *Client) addToolsToServer(ctx context.Context, mcpServer *server.MCPServer) error {
-	toolsRequest := mcp.ListToolsRequest{}
-	filterFunc := func(toolName string) bool {
-		return true
-	}
-
-	if c.options != nil && c.options.ToolFilter != nil && len(c.options.ToolFilter.List) > 0 {
-		filterSet := make(map[string]struct{})
-		mode := config.ToolFilterMode(strings.ToLower(string(c.options.ToolFilter.Mode)))
-		for _, toolName := range c.options.ToolFilter.List {
-			filterSet[toolName] = struct{}{}
-		}
-		switch mode {
-		case config.ToolFilterModeAllow:
-			filterFunc = func(toolName string) bool {
-				_, inList := filterSet[toolName]
-				if !inList {
-					log.Printf("<%s> Ignoring tool %s as it is not in allow list", c.name, toolName)
-				}
-				return inList
-			}
-		case config.ToolFilterModeBlock:
-			filterFunc = func(toolName string) bool {
-				_, inList := filterSet[toolName]
-				if inList {
-					log.Printf("<%s> Ignoring tool %s as it is in block list", c.name, toolName)
-				}
-				return !inList
-			}
-		default:
-			log.Printf("<%s> Unknown tool filter mode: %s, skipping tool filter", c.name, mode)
-		}
-	}
-
-	for {
-		tools, err := c.client.ListTools(ctx, toolsRequest)
-		if err != nil {
-			return err
-		}
-		if len(tools.Tools) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d tools", c.name, len(tools.Tools))
-		for _, tool := range tools.Tools {
-			if filterFunc(tool.Name) {
-				log.Printf("<%s> Adding tool %s", c.name, tool.Name)
-				mcpServer.AddTool(tool, c.client.CallTool)
-			}
-		}
-		if tools.NextCursor == "" {
-			break
-		}
-		toolsRequest.Params.Cursor = tools.NextCursor
-	}
-
-	return nil
-}
-
-func (c *Client) addPromptsToServer(ctx context.Context, mcpServer *server.MCPServer) error {
-	promptsRequest := mcp.ListPromptsRequest{}
-	for {
-		prompts, err := c.client.ListPrompts(ctx, promptsRequest)
-		if err != nil {
-			return err
-		}
-		if len(prompts.Prompts) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d prompts", c.name, len(prompts.Prompts))
-		for _, prompt := range prompts.Prompts {
-			log.Printf("<%s> Adding prompt %s", c.name, prompt.Name)
-			mcpServer.AddPrompt(prompt, c.client.GetPrompt)
-		}
-		if prompts.NextCursor == "" {
-			break
-		}
-		promptsRequest.Params.Cursor = prompts.NextCursor
-	}
-	return nil
-}
-
-func (c *Client) addResourcesToServer(ctx context.Context, mcpServer *server.MCPServer) error {
-	resourcesRequest := mcp.ListResourcesRequest{}
-	for {
-		resources, err := c.client.ListResources(ctx, resourcesRequest)
-		if err != nil {
-			return err
-		}
-		if len(resources.Resources) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d resources", c.name, len(resources.Resources))
-		for _, resource := range resources.Resources {
-			log.Printf("<%s> Adding resource %s", c.name, resource.Name)
-			mcpServer.AddResource(resource, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-				readResource, e := c.client.ReadResource(ctx, request)
-				if e != nil {
-					return nil, e
-				}
-				return readResource.Contents, nil
-			})
-		}
-		if resources.NextCursor == "" {
-			break
-		}
-		resourcesRequest.Params.Cursor = resources.NextCursor
-
-	}
-	return nil
-}
-
-func (c *Client) addResourceTemplatesToServer(ctx context.Context, mcpServer *server.MCPServer) error {
-	resourceTemplatesRequest := mcp.ListResourceTemplatesRequest{}
-	for {
-		resourceTemplates, err := c.client.ListResourceTemplates(ctx, resourceTemplatesRequest)
-		if err != nil {
-			return err
-		}
-		if len(resourceTemplates.ResourceTemplates) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d resource templates", c.name, len(resourceTemplates.ResourceTemplates))
-		for _, resourceTemplate := range resourceTemplates.ResourceTemplates {
-			log.Printf("<%s> Adding resource template %s", c.name, resourceTemplate.Name)
-			mcpServer.AddResourceTemplate(resourceTemplate, func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-				readResource, e := c.client.ReadResource(ctx, request)
-				if e != nil {
-					return nil, e
-				}
-				return readResource.Contents, nil
-			})
-		}
-		if resourceTemplates.NextCursor == "" {
-			break
-		}
-		resourceTemplatesRequest.Params.Cursor = resourceTemplates.NextCursor
-	}
-	return nil
-}
-
-// storeToolsForLazyLoad fetches and stores tools without registering them
-func (c *Client) storeToolsForLazyLoad(ctx context.Context) error {
-	toolsRequest := mcp.ListToolsRequest{}
-	filterFunc := func(toolName string) bool {
-		return true
-	}
-
-	if c.options != nil && c.options.ToolFilter != nil && len(c.options.ToolFilter.List) > 0 {
-		filterSet := make(map[string]struct{})
-		mode := config.ToolFilterMode(strings.ToLower(string(c.options.ToolFilter.Mode)))
-		for _, toolName := range c.options.ToolFilter.List {
-			filterSet[toolName] = struct{}{}
-		}
-		switch mode {
-		case config.ToolFilterModeAllow:
-			filterFunc = func(toolName string) bool {
-				_, inList := filterSet[toolName]
-				if !inList {
-					log.Printf("<%s> Ignoring tool %s as it is not in allow list", c.name, toolName)
-				}
-				return inList
-			}
-		case config.ToolFilterModeBlock:
-			filterFunc = func(toolName string) bool {
-				_, inList := filterSet[toolName]
-				if inList {
-					log.Printf("<%s> Ignoring tool %s as it is in block list", c.name, toolName)
-				}
-				return !inList
-			}
-		default:
-			log.Printf("<%s> Unknown tool filter mode: %s, skipping tool filter", c.name, mode)
-		}
-	}
-
-	for {
-		tools, err := c.client.ListTools(ctx, toolsRequest)
-		if err != nil {
-			return err
-		}
-		if len(tools.Tools) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d tools for lazy loading", c.name, len(tools.Tools))
-		for _, tool := range tools.Tools {
-			if filterFunc(tool.Name) {
-				c.lazyTools = append(c.lazyTools, tool)
-			}
-		}
-		if tools.NextCursor == "" {
-			break
-		}
-		toolsRequest.Params.Cursor = tools.NextCursor
-	}
-
-	return nil
-}
-
-// storePromptsForLazyLoad fetches and stores prompts without registering them
-func (c *Client) storePromptsForLazyLoad(ctx context.Context) error {
-	promptsRequest := mcp.ListPromptsRequest{}
-	for {
-		prompts, err := c.client.ListPrompts(ctx, promptsRequest)
-		if err != nil {
-			return err
-		}
-		if len(prompts.Prompts) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d prompts for lazy loading", c.name, len(prompts.Prompts))
-		for _, prompt := range prompts.Prompts {
-			c.lazyPrompts = append(c.lazyPrompts, prompt)
-		}
-		if prompts.NextCursor == "" {
-			break
-		}
-		promptsRequest.Params.Cursor = prompts.NextCursor
-	}
-	return nil
-}
-
-// storeResourcesForLazyLoad fetches and stores resources without registering them
-func (c *Client) storeResourcesForLazyLoad(ctx context.Context) error {
-	resourcesRequest := mcp.ListResourcesRequest{}
-	for {
-		resources, err := c.client.ListResources(ctx, resourcesRequest)
-		if err != nil {
-			return err
-		}
-		if len(resources.Resources) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d resources for lazy loading", c.name, len(resources.Resources))
-		for _, resource := range resources.Resources {
-			c.lazyResources = append(c.lazyResources, resource)
-		}
-		if resources.NextCursor == "" {
-			break
-		}
-		resourcesRequest.Params.Cursor = resources.NextCursor
-
-	}
-	return nil
-}
-
-// storeResourceTemplatesForLazyLoad fetches and stores resource templates without registering them
-func (c *Client) storeResourceTemplatesForLazyLoad(ctx context.Context) error {
-	resourceTemplatesRequest := mcp.ListResourceTemplatesRequest{}
-	for {
-		resourceTemplates, err := c.client.ListResourceTemplates(ctx, resourceTemplatesRequest)
-		if err != nil {
-			return err
-		}
-		if len(resourceTemplates.ResourceTemplates) == 0 {
-			break
-		}
-		log.Printf("<%s> Successfully listed %d resource templates for lazy loading", c.name, len(resourceTemplates.ResourceTemplates))
-		for _, resourceTemplate := range resourceTemplates.ResourceTemplates {
-			c.lazyTemplates = append(c.lazyTemplates, resourceTemplate)
-		}
-		if resourceTemplates.NextCursor == "" {
-			break
-		}
-		resourceTemplatesRequest.Params.Cursor = resourceTemplates.NextCursor
-	}
-	return nil
-}
-
 func (c *Client) Close() error {
 	if c.client != nil {
 		return c.client.Close()
@@ -597,72 +177,72 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// GetClient returns the underlying MCP client
+// CloseFailed terminates a provider that did not finish startup. Stdio clients
+// kill and reap their child directly so mcp-go cannot block waiting for a child
+// that is still holding its pipes open.
+func (c *Client) CloseFailed(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.closeFailed != nil {
+		return c.closeFailed(ctx)
+	}
+	return c.Close()
+}
+
+// CallTool invokes a tool through the downstream MCP client.
+func (c *Client) CallTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return c.client.CallTool(ctx, request)
+}
+
+// GetClient returns the underlying MCP client.
 func (c *Client) GetClient() *client.Client {
 	return c.client
 }
 
-// NeedManualStart returns whether the client needs manual start
+// NeedManualStart reports whether the transport needs an explicit Start call.
 func (c *Client) NeedManualStart() bool {
 	return c.needManualStart
 }
 
-// NeedPing returns whether the client needs pinging
+// NeedPing reports whether the transport uses the inherited keepalive task.
 func (c *Client) NeedPing() bool {
 	return c.needPing
 }
 
-// StartPingTask starts the ping task for the client
+// StartPingTask pings until the provider lifecycle context is canceled.
 func (c *Client) StartPingTask(ctx context.Context) {
 	c.startPingTask(ctx)
 }
 
-type Server struct {
-	tokens    []string
-	mcpServer *server.MCPServer
-	handler   http.Handler
+type managedCommand struct {
+	mu  sync.Mutex
+	cmd *exec.Cmd
 }
 
-func NewMCPServer(name string, serverConfig *config.MCPProxyConfigV2, clientConfig *config.MCPClientConfigV2) (*Server, error) {
-	serverOpts := []server.ServerOption{
-		server.WithResourceCapabilities(true, true),
-		server.WithRecovery(),
-	}
+func (c *managedCommand) command(ctx context.Context, command string, env, args []string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = append(os.Environ(), env...)
+	c.mu.Lock()
+	c.cmd = cmd
+	c.mu.Unlock()
+	return cmd, nil
+}
 
-	if clientConfig.Options.LogEnabled.OrElse(false) {
-		serverOpts = append(serverOpts, server.WithLogging())
+func (c *managedCommand) terminate(ctx context.Context) error {
+	c.mu.Lock()
+	cmd := c.cmd
+	c.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return nil
 	}
-	mcpServer := server.NewMCPServer(
-		name,
-		serverConfig.Version,
-		serverOpts...,
-	)
-
-	var handler http.Handler
-
-	switch serverConfig.Type {
-	case config.MCPServerTypeSSE:
-		handler = server.NewSSEServer(
-			mcpServer,
-			server.WithStaticBasePath(name),
-			server.WithBaseURL(serverConfig.BaseURL),
-		)
-	case config.MCPServerTypeStreamable:
-		handler = server.NewStreamableHTTPServer(
-			mcpServer,
-			server.WithStateLess(true),
-		)
-	default:
-		return nil, fmt.Errorf("unknown server type: %s", serverConfig.Type)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	srv := &Server{
-		mcpServer: mcpServer,
-		handler:   handler,
+	killErr := cmd.Process.Kill()
+	waitErr := cmd.Wait()
+	if killErr == nil || errors.Is(killErr, os.ErrProcessDone) {
+		return nil
 	}
-
-	if clientConfig.Options != nil && len(clientConfig.Options.AuthTokens) > 0 {
-		srv.tokens = clientConfig.Options.AuthTokens
-	}
-
-	return srv, nil
+	return errors.Join(killErr, waitErr)
 }

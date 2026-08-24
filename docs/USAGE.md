@@ -3,93 +3,58 @@
 ## CLI
 
 ```text
--config string         path to config file or a http(s) url (default "config.json")
--expand-env            expand environment variables in config file (default true)
--http-headers string   optional headers for config URL: 'Key1:Value1;Key2:Value2'
--http-timeout int      timeout (seconds) for remote config fetch (default 10)
+-config string         path to a config file or HTTP(S) URL (default "config.json")
+-expand-env            expand environment variables (default true)
+-http-headers string   headers for a remote config URL
+-http-timeout int      remote config timeout in seconds (default 10)
+-hierarchy string      path to hierarchy directory (overrides config)
 -insecure              skip TLS verification for remote config
+-port string           override the configured HTTP port
 -version               print version and exit
 -help                  print help and exit
 ```
 
-## Meta-Tools
+## Outward tools
 
-The router exposes 2 tools for navigating and executing tools across all MCP servers:
+Tappet currently exposes exactly two tools.
 
-### `get_tools_in_category(path)`
+### `get_tools_in_category`
 
-Navigate the tool hierarchy and discover available tools.
+Input:
 
-**Arguments:**
-- `path` (string): Category path using dot notation (e.g., `"coding_tools.serena"`) or `""` for root
-
-**Returns:**
-- `overview`: Description of the category
-- `categories`: Available subcategories with descriptions
-- `tools`: Available tools at this level with full paths
-
-**Example:**
 ```json
-get_tools_in_category("coding_tools.serena")
-→ {
-    "overview": "Serena semantic code analysis",
-    "categories": {
-      "search": "Find symbols and references",
-      "edit": "Modify code intelligently"
-    },
-    "tools": {
-      "get_symbols_overview": {
-        "description": "Get overview of file symbols",
-        "tool_path": "coding_tools.serena.get_symbols_overview"
-      }
-    }
-  }
+{"path": "everything"}
 ```
 
-### `execute_tool(tool_path, arguments)`
+The result is JSON text with `path`, an optional `overview`, direct `children`, and available `tools`. Each tool includes its description and exact `tool_path`. Use an empty path or `/` for the root.
 
-Execute a tool by its full hierarchical path.
+Browsing reads the generated JSON loaded at startup. It does not connect to a downstream provider.
 
-**Arguments:**
-- `tool_path` (string): Full tool path (e.g., `"coding_tools.serena.find_symbol"`)
-- `arguments` (object): Arguments to pass to the tool
+### `execute_tool`
 
-**Behavior:**
-- Lazy-loads the MCP server if not already running
-- Proxies request to the actual MCP server
-- Returns the tool's result
+Input:
 
-**Example:**
 ```json
-execute_tool(
-  "coding_tools.serena.find_symbol",
-  {
-    "name_path": "Client",
-    "relative_path": "client.go",
-    "depth": 1
+{
+  "tool_path": "everything.echo",
+  "arguments": {
+    "message": "hello"
   }
-)
-→ <result from Serena's find_symbol tool>
+}
 ```
 
-## Workflow
+Tappet resolves the exact path, starts and initializes the mapped provider if needed, calls the mapped downstream tool, and returns its MCP result. It reuses that provider until shutdown.
 
-1. **List available tools**: `tools/list` → returns 2 meta-tools
-2. **Explore root**: `get_tools_in_category("")` → see top-level categories
-3. **Navigate deeper**: `get_tools_in_category("coding_tools")` → see dev tools
-4. **Execute tool**: `execute_tool("coding_tools.serena.find_symbol", {...})` → runs the tool
+Calls to one provider are serialized. Calls to different providers may overlap. Each invocation has a 30-second deadline covering lazy provider startup, initialization, time spent waiting for the same-provider lock, and the downstream call. A provider's connection and ping task use a separate registry lifecycle context, so canceling the request that first starts an SSE provider does not terminate the cached provider.
 
-## Auth
+When a downstream call returns an error and the generated hierarchy contains an input schema, Tappet appends that schema as a diagnostic. An MCP result with `isError: true` remains an MCP result, and structured content is preserved.
 
-If `options.authTokens` is set, requests must include:
+## HTTP authentication
 
-```
+When `options.authTokens` is non-empty, send:
+
+```text
 Authorization: Bearer <token>
 ```
 
-## Endpoints
-
-Given `mcpProxy.baseURL = http://localhost:8080`:
-
-- For `type: sse`: `http://localhost:8080/sse`
-- For `type: streamable-http`: `http://localhost:8080/mcp`
+In SSE mode, clients connect to `/sse`; downstream client messages use `/message`. In Streamable HTTP mode, clients connect to `/`.

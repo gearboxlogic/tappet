@@ -1,135 +1,92 @@
 # Configuration
 
-## Basic Setup
+Tappet reads JSON from a local file or an HTTP(S) URL. Environment expansion is enabled by default.
 
 ```json
 {
   "mcpProxy": {
-    "baseURL": "http://localhost",
+    "baseURL": "http://localhost:8080",
     "addr": ":8080",
-    "name": "MCP Router",
-    "version": "1.0.0",
+    "name": "Tappet",
+    "version": "0.1.0",
     "type": "streamable-http",
+    "hierarchyPath": "testdata/mcp_hierarchy",
     "options": {
       "logEnabled": true,
       "authTokens": []
     }
   },
-  "mcpServers": {}
+  "mcpServers": {
+    "everything": {
+      "transportType": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"],
+      "env": {},
+      "options": {}
+    }
+  }
 }
 ```
 
-## Environment Variables
+The `mcpProxy` JSON key is retained for configuration compatibility. It configures the outward Tappet server.
 
-The config file supports environment variable expansion (enabled by default with `-expand-env`). Use `${VAR_NAME}` syntax:
+## Outward server
+
+- `baseURL` is the public base URL used by SSE mode.
+- `addr` is the HTTP bind address.
+- `name` and `version` become MCP server identity metadata.
+- `type` accepts `stdio`, `sse`, or `streamable-http`.
+- `hierarchyPath` names the generated hierarchy directory.
+- `options.logEnabled` enables MCP and HTTP request logging.
+- `options.authTokens` accepts bearer tokens for HTTP transports.
+
+## Downstream providers
+
+Each `mcpServers` entry supports one transport:
+
+- `stdio`: `command`, `args`, and `env`
+- `sse`: `url` and `headers`
+- `streamable-http`: `url`, `headers`, and `timeout`
+
+The current client explicitly performs the legacy MCP initialize handshake after starting a provider.
+
+Environment values use `${NAME}` syntax:
 
 ```json
 {
   "mcpServers": {
-    "serena": {
-      "command": "uv",
-      "args": ["--directory", "${SERENA_PATH}", "run", "serena", "start-mcp-server"],
+    "example": {
+      "transportType": "stdio",
+      "command": "${EXAMPLE_SERVER}",
+      "args": ["serve"],
       "env": {}
     }
   }
 }
 ```
 
-Then set the environment variable:
 ```bash
-export SERENA_PATH="/path/to/your/serena"
-./build/mcp-proxy --config config.json
+export EXAMPLE_SERVER=/path/to/example-server
+./build/tappet --config config.json
 ```
 
-## mcpProxy
+## Generated hierarchy
 
-- `baseURL`: Public URL base for client endpoints
-- `addr`: Bind address (e.g. `:8080`)
-- `name`, `version`: Server identity for MCP handshake
-- `type`: `sse` or `streamable-http`
-- `options`:
-  - `logEnabled` (bool): Enable request logging
-  - `authTokens` ([]string): Valid bearer tokens for authentication
+`tappet-structure-generator` writes `root.json`, one provider overview, and one JSON file per tool. A leaf maps its public hierarchy name to its downstream provider and tool name:
 
-## Hierarchy Configuration
-
-The router loads tool hierarchy from `testdata/mcp_hierarchy/` (default path). Each directory contains a JSON file defining:
-
-**Root** (`root.json`):
 ```json
 {
-  "overview": "Description of what this level provides",
-  "categories": {
-    "coding_tools": "Development tools...",
-    "web_tools": "Web scraping..."
-  },
   "tools": {
-    "get_tools_in_category": {
-      "description": "Navigate the hierarchy",
-      "inputSchema": {...}
-    },
-    "execute_tool": {
-      "description": "Execute a tool by path",
-      "inputSchema": {...}
+    "echo": {
+      "description": "Echoes the input",
+      "maps_to": "echo",
+      "server": "everything",
+      "inputSchema": {
+        "type": "object"
+      }
     }
   }
 }
 ```
 
-**Category with MCP Server** (`coding_tools/serena/serena.json`):
-```json
-{
-  "overview": "Serena semantic code analysis",
-  "mcp_server": {
-    "name": "serena",
-    "type": "stdio",
-    "command": "uv",
-    "args": ["--directory", "/path/to/serena", "run", "serena", "start-mcp-server"],
-    "env": {}
-  },
-  "categories": {
-    "search": "Find symbols and references",
-    "edit": "Modify code intelligently"
-  },
-  "tools": {
-    "get_symbols_overview": {
-      "description": "Get overview of file symbols",
-      "maps_to": "get_symbols_overview"
-    }
-  }
-}
-```
-
-### MCP Server Configuration
-
-The `mcp_server` block supports:
-- **stdio**: `command`, `args`, `env`
-- **sse**: `url`, `headers`
-- **streamable-http**: `url`, `headers`, `timeout`
-
-Server configs are inherited by child categories (no need to repeat).
-
-### Tool Mapping
-
-- `maps_to`: Maps hierarchy tool name to actual MCP tool name
-- If omitted, hierarchy name is used as-is
-- Enables renaming tools for better organization
-
-## Structure Example
-
-```
-testdata/mcp_hierarchy/
-├── root.json
-├── coding_tools/
-│   ├── coding_tools.json
-│   └── serena/
-│       ├── serena.json          (MCP server config here)
-│       ├── search/
-│       │   └── search.json
-│       └── edit/
-│           └── edit.json
-└── web_tools/
-    └── web_tools.json
-```
-
-See example hierarchy in the repository.
+The path follows the file location. For example, `everything/echo.json` resolves as `everything.echo`. `maps_to` may differ from the hierarchy name.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/voicetreelab/lazy-mcp/internal/config"
-	"github.com/voicetreelab/lazy-mcp/internal/server"
+	"github.com/gearboxlogic/tappet/internal/config"
+	"github.com/gearboxlogic/tappet/internal/server"
 )
 
 var BuildVersion = "dev"
@@ -14,7 +14,7 @@ var BuildVersion = "dev"
 func main() {
 	conf := flag.String("config", "config.json", "path to config file or a http(s) url")
 	port := flag.String("port", "", "port to listen on (overrides config), e.g. '8080' or ':8080'")
-	_ = flag.String("hierarchy", "testdata/mcp_hierarchy", "path to hierarchy directory")
+	hierarchyPath := flag.String("hierarchy", "", "path to hierarchy directory (overrides config)")
 	insecure := flag.Bool("insecure", false, "allow insecure HTTPS connections by skipping TLS certificate verification")
 	expandEnv := flag.Bool("expand-env", true, "expand environment variables in config file")
 	httpHeaders := flag.String("http-headers", "", "optional HTTP headers for config URL, format: 'Key1:Value1;Key2:Value2'")
@@ -36,14 +36,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Override port if specified
-	if *port != "" {
-		if (*port)[0] != ':' {
-			cfg.McpProxy.Addr = ":" + *port
-		} else {
-			cfg.McpProxy.Addr = *port
-		}
-	}
+	applyOverrides(cfg, *port, *hierarchyPath)
 
 	// Start server based on configured type
 	switch cfg.McpProxy.Type {
@@ -55,5 +48,18 @@ func main() {
 
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func applyOverrides(cfg *config.Config, port, hierarchyPath string) {
+	if port != "" {
+		if port[0] != ':' {
+			cfg.McpProxy.Addr = ":" + port
+		} else {
+			cfg.McpProxy.Addr = port
+		}
+	}
+	if hierarchyPath != "" {
+		cfg.McpProxy.HierarchyPath = hierarchyPath
 	}
 }

@@ -1,0 +1,21 @@
+{
+  "mcpProxy": {
+    "baseURL": "http://localhost:9090",
+    "addr": ":9090",
+    "name": "Tappet",
+    "version": "0.1.0",
+    "type": "streamable-http",
+    "hierarchyPath": "/config/hierarchy"
+  },
+  "mcpServers": {
+    "everything": {
+      "transportType": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ],
+      "env": {}
+    }
+  }
+}

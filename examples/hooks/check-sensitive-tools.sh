@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Claude Code PreToolUse Hook for lazy-mcp
+# Claude Code PreToolUse Hook for Tappet
 #
 # This hook inspects execute_tool calls and decides whether to:
 #   - Allow silently (exit 0, no output)
@@ -8,8 +8,8 @@
 #   - Deny (exit 0 with JSON permissionDecision: "deny")
 #
 # Configuration via environment variables:
-#   LAZY_MCP_SENSITIVE_TOOLS - Comma-separated list of tool patterns requiring permission
-#   LAZY_MCP_DENIED_TOOLS    - Comma-separated list of tool patterns to block entirely
+#   TAPPET_SENSITIVE_TOOLS - Comma-separated list of tool patterns requiring permission
+#   TAPPET_DENIED_TOOLS    - Comma-separated list of tool patterns to block entirely
 #
 # Tool patterns support:
 #   - Exact match: "gmail.send_email"
@@ -17,8 +17,8 @@
 #   - Suffix match: "*.delete_*" (all delete operations)
 #
 # Example:
-#   export LAZY_MCP_SENSITIVE_TOOLS="gmail.send_email,gmail.create_draft,github.create_*,gitlab.create_*"
-#   export LAZY_MCP_DENIED_TOOLS="gmail.delete_email"
+#   export TAPPET_SENSITIVE_TOOLS="gmail.send_email,gmail.create_draft,github.create_*,gitlab.create_*"
+#   export TAPPET_DENIED_TOOLS="gmail.delete_email"
 #
 
 set -euo pipefail
@@ -62,8 +62,8 @@ DEFAULT_DENIED_TOOLS=(
 )
 
 # Parse environment variables into arrays
-IFS=',' read -ra ENV_SENSITIVE_TOOLS <<< "${LAZY_MCP_SENSITIVE_TOOLS:-}"
-IFS=',' read -ra ENV_DENIED_TOOLS <<< "${LAZY_MCP_DENIED_TOOLS:-}"
+IFS=',' read -ra ENV_SENSITIVE_TOOLS <<< "${TAPPET_SENSITIVE_TOOLS:-}"
+IFS=',' read -ra ENV_DENIED_TOOLS <<< "${TAPPET_DENIED_TOOLS:-}"
 
 # Combine defaults with environment overrides
 SENSITIVE_TOOLS=("${DEFAULT_SENSITIVE_TOOLS[@]}" "${ENV_SENSITIVE_TOOLS[@]}")
@@ -73,7 +73,7 @@ DENIED_TOOLS=("${DEFAULT_DENIED_TOOLS[@]}" "${ENV_DENIED_TOOLS[@]}")
 INPUT=$(cat)
 
 # Extract tool_path from the arguments
-# Input format: {"tool_name": "mcp__lazy-mcp__execute_tool", "tool_input": {"tool_path": "...", "arguments": {...}}}
+# Input format: {"tool_name": "mcp__tappet__execute_tool", "tool_input": {"tool_path": "...", "arguments": {...}}}
 TOOL_PATH=$(echo "$INPUT" | jq -r '.tool_input.tool_path // empty' 2>/dev/null)
 
 if [[ -z "$TOOL_PATH" ]]; then

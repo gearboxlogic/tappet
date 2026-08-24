@@ -1,10 +1,30 @@
 version: 2
+project_name: tappet
 builds:
-  - id: mcp-proxy
-    main: .
-    binary: mcp-proxy
+  - id: tappet
+    main: ./cmd/tappet
+    binary: tappet
+    env:
+      - CGO_ENABLED=0
     ldflags:
       - -s -w -X main.BuildVersion={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+  - id: tappet-structure-generator
+    main: ./structure_generator/cmd
+    binary: tappet-structure-generator
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
     goos:
       - linux
       - darwin
