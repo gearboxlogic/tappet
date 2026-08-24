@@ -547,11 +547,17 @@ provider message. The fixed outer code remains bounded even when the accepted
 provider code has an unusually long numeric lexeme.
 Before transmitting any invocation byte, admission reserves one terminal-error
 object, its potential retrieval lease, and enough bytes for the maximum accepted
-downstream JSON-RPC error. If that reservation is unavailable, invocation fails
+downstream JSON-RPC error. The invocation retains that reservation until its
+result has completed all broker adaptation and publication, including every
+follow-up `resources/read` needed to materialize resource links. The same held
+reservation can commit either the `tools/call` error spill or the one sanitized
+resource-read error selected as the terminal outward failure; a provider request
+is never transmitted after the reservation has been released. If the initial
+reservation is unavailable, invocation fails
 with typed `provider_error_capacity_exhausted`,
 `provider_call_state: "not_started"`, and `retry_safe: true`. An inline error
-releases the unused reservation; an oversized accepted error commits its spill
-from the reservation.
+or a successfully published adapted result releases the unused reservation; an
+oversized accepted error commits its spill from the reservation.
 Quota exhaustion therefore cannot replace a received authorization or other
 provider error. A storage-integrity failure despite a committed reservation is
 reported as `downstream_error_preservation_failed`, with the completed-call and
@@ -736,13 +742,17 @@ and releases every staged resource snapshot, object slot, and byte reservation;
 no unreachable resource object remains charged against quota.
 
 If a downstream `resources/read` failure needs an error spill for its structured
-cause, Tappet first aborts that success transaction. It then admits and commits
-an independent error-only spill transaction and returns its `error_ref` only
-after that commit succeeds. The error transaction never commits staged resource
-handles or a result spill. If error-spill admission fails, the preservation
-error returns the completed-call failure envelope without an `error_ref`. A
-transport failure after either publication commit cannot be rolled back safely,
-so ordinary finite handle expiry reclaims the published object.
+cause, Tappet first aborts the success transaction without releasing the
+invocation's terminal-error reservation. It then commits an independent
+error-only spill transaction from that held reservation and returns its
+`error_ref` only after that commit succeeds. The error transaction never commits
+staged resource handles or a result spill. Because capacity was reserved before
+`tools/call`, spill admission cannot discard the sanitized provider error at
+this post-call stage. A storage-integrity failure despite the reservation uses
+`downstream_error_preservation_failed` and the completed-call envelope defined
+in section 6.5.1; it is not reported as quota exhaustion. A transport failure
+after either publication commit cannot be rolled back safely, so ordinary
+finite handle expiry reclaims the published object.
 
 The outward broker advertises MCP resource support for a scoped
 `resources/read` route. Reading the rewritten URI returns the exact snapshotted
