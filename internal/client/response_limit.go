@@ -190,7 +190,6 @@ func (b *responseLimitedBody) load() {
 		return
 	}
 	if int64(len(data)) > b.maxBytes {
-		b.pending = data[:b.maxBytes]
 		b.pendingErr = fmt.Errorf("%w: response exceeds %d bytes", ErrResponseLimitExceeded, b.maxBytes)
 		_ = b.body.Close()
 		return

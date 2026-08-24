@@ -63,7 +63,7 @@ func TestResponseLimitedRoundTripperRejectsDeclaredOversize(t *testing.T) {
 	assert.True(t, body.closed.Load())
 }
 
-func TestResponseLimitedRoundTripperBoundsUndeclaredBody(t *testing.T) {
+func TestResponseLimitedRoundTripperRejectsUndeclaredOversizeBeforeRelease(t *testing.T) {
 	roundTripper := responseLimitedRoundTripper{
 		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{
@@ -80,7 +80,7 @@ func TestResponseLimitedRoundTripperBoundsUndeclaredBody(t *testing.T) {
 	require.NoError(t, err)
 	data, readErr := io.ReadAll(response.Body)
 
-	assert.Equal(t, "01234567", string(data))
+	assert.Empty(t, data)
 	require.ErrorIs(t, readErr, ErrResponseLimitExceeded)
 }
 
@@ -232,6 +232,18 @@ func TestLimitedStdioTransportRetainsInboundHandlersUntilStart(t *testing.T) {
 
 	assert.NotNil(t, recorder.notificationHandler)
 	assert.NotNil(t, recorder.requestHandler)
+}
+
+func TestResponseValidatingTransportForwardsRequestHandler(t *testing.T) {
+	stdioTransport := newLimitedStdioTransport("unused", nil, nil, 1_024)
+	validatingTransport := newResponseValidatingTransport(stdioTransport, stdioTransport.validation)
+	requestHandler := func(context.Context, transport.JSONRPCRequest) (*transport.JSONRPCResponse, error) {
+		return nil, nil
+	}
+
+	validatingTransport.SetRequestHandler(requestHandler)
+
+	assert.NotNil(t, stdioTransport.requestHandler)
 }
 
 func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {

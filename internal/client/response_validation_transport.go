@@ -67,6 +67,12 @@ func (t *responseValidatingTransport) SetNotificationHandler(handler func(mcp.JS
 	t.inner.SetNotificationHandler(handler)
 }
 
+func (t *responseValidatingTransport) SetRequestHandler(handler transport.RequestHandler) {
+	if bidirectional, ok := t.inner.(transport.BidirectionalInterface); ok {
+		bidirectional.SetRequestHandler(handler)
+	}
+}
+
 func (t *responseValidatingTransport) Close() error {
 	return t.inner.Close()
 }
