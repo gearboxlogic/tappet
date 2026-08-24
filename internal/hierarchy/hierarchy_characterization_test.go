@@ -320,7 +320,7 @@ func TestLiveWaiterRetriesLoadCanceledByInitiatingCaller(t *testing.T) {
 		if currentLoad == 1 {
 			close(firstLoadStarted)
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return nil, markProviderLoadCanceledByInitiator(ctx.Err())
 		}
 		return provider, nil
 	})
@@ -391,6 +391,50 @@ func TestLiveWaiterPreservesProviderLocalLoadTimeout(t *testing.T) {
 	}()
 	time.Sleep(20 * time.Millisecond)
 	close(releaseFirstLoad)
+
+	assert.ErrorIs(t, <-initiatorResult, context.DeadlineExceeded)
+	assert.ErrorIs(t, <-waiterResult, context.DeadlineExceeded)
+	loadMu.Lock()
+	assert.Equal(t, 1, loadCount)
+	loadMu.Unlock()
+}
+
+func TestLiveWaiterPreservesUnmarkedProviderTimeoutFromExpiredInitiator(t *testing.T) {
+	loadStarted := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	var loadCount int
+	var loadMu sync.Mutex
+	unwantedRetry := errors.New("provider load retried")
+	registry := newServerRegistry(characterizationConfigs(), func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error) {
+		loadMu.Lock()
+		loadCount++
+		currentLoad := loadCount
+		loadMu.Unlock()
+		if currentLoad != 1 {
+			return nil, unwantedRetry
+		}
+		close(loadStarted)
+		<-releaseLoad
+		return nil, context.DeadlineExceeded
+	})
+	defer registry.Close()
+
+	initiatorCtx, cancelInitiator := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelInitiator()
+	initiatorResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(initiatorCtx, "provider-a")
+		initiatorResult <- err
+	}()
+	<-loadStarted
+
+	waiterResult := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+		waiterResult <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(releaseLoad)
 
 	assert.ErrorIs(t, <-initiatorResult, context.DeadlineExceeded)
 	assert.ErrorIs(t, <-waiterResult, context.DeadlineExceeded)

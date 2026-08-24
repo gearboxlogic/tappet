@@ -491,6 +491,12 @@ type providerLoad struct {
 	initiatingCallerCanceled bool
 }
 
+var errProviderLoadCanceledByInitiator = errors.New("provider load canceled by initiating caller")
+
+func markProviderLoadCanceledByInitiator(err error) error {
+	return fmt.Errorf("%w: %w", errProviderLoadCanceledByInitiator, err)
+}
+
 // ProviderClient is the part of a downstream MCP client used by the hierarchy.
 type ProviderClient interface {
 	CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
@@ -611,7 +617,7 @@ func (r *ServerRegistry) GetOrLoadServer(ctx context.Context, serverName string)
 		r.mu.Unlock()
 
 		mcpClient, err := r.clientFactory(ctx, serverName, cfg)
-		initiatingCallerCanceled := ctx.Err() != nil && errors.Is(err, ctx.Err())
+		initiatingCallerCanceled := errors.Is(err, errProviderLoadCanceledByInitiator)
 
 		r.mu.Lock()
 		if err == nil && r.closed {
@@ -648,14 +654,14 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 			startCtx.abort()
 			closeFailedProviderAsync(serverName, mcpClient)
 			if ctx.Err() != nil {
-				return nil, fmt.Errorf("failed to start MCP client: %w", ctx.Err())
+				return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
 			}
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
 		if ctx.Err() != nil {
 			startCtx.abort()
 			closeFailedProviderAsync(serverName, mcpClient)
-			return nil, fmt.Errorf("failed to start MCP client: %w", ctx.Err())
+			return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
 		}
 		startCtx.detach()
 	}
@@ -670,6 +676,9 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 			startCtx.abort()
 		}
 		closeFailedProviderAsync(serverName, mcpClient)
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return nil, fmt.Errorf("failed to initialize MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
+		}
 		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
 
