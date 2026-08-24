@@ -325,8 +325,8 @@ maxima unless this document and the associated benchmarks are updated:
 | inline materialization or typed invocation result | 256 KiB | 1 MiB |
 | accepted broker-adapted invocation result | 16 MiB | 16 MiB |
 | accepted downstream JSON-RPC error | 16 MiB | 16 MiB |
-| one snapshotted provider resource response | 4 MiB | 4 MiB |
-| all snapshotted resource responses for one invocation | 16 MiB | 16 MiB |
+| complete encoded `resources/read` response for one snapshot | 1 MiB | 1 MiB |
+| stored resource snapshot bytes for one invocation | 16 MiB | 16 MiB |
 | decoded bytes in one `tappet.read` chunk | 64 KiB | 64 KiB |
 
 Encoded response size means the exact compact UTF-8 JSON encoding of the
@@ -410,10 +410,12 @@ of the broker transport or MCP protocol session.
 
 An inline `invoke` result keeps the downstream MCP result at the outer protocol
 level. Tappet forwards every provider content block in the outer
-`CallToolResult.Content`; text, image, audio, and embedded-resource blocks remain
-unchanged. A resource-link block keeps its name, title, description, media type,
-and annotations, but its provider-scoped URI is rewritten to the resolvable
-broker URI defined in section 6.5.3. Tappet also preserves
+`CallToolResult.Content`; text, image, and audio blocks remain unchanged. An
+embedded-resource block keeps its typed contents and all non-URI fields, but
+each standard `ResourceContents.uri` is rewritten to a resolvable broker URI
+backed by the snapshot defined in section 6.5.3. A resource-link block keeps its
+name, title, description, media type, and annotations, but its provider-scoped
+URI is rewritten through the same route. Tappet also preserves
 `StructuredContent` and `IsError`.
 For inline results, Tappet copies every provider-defined `_meta` entry to the
 same top-level key so unmodified consumers keep seeing the metadata paths they
@@ -680,28 +682,40 @@ The outer 1 MiB limit remains authoritative even when individual fields are
 below their limits. Deployments may set smaller limits, but changing these
 V1-alpha maxima requires an explicit architecture and benchmark update.
 
-#### 6.5.3 Scoped provider resource links
+#### 6.5.3 Scoped provider resources and links
 
 A downstream `resource-link` URI is scoped to the provider connection that
 returned it; forwarding that URI without a read route would create a dangling
 link. Before publishing an invocation result containing such a block, Tappet
 uses that same initialized provider session to call downstream
-`resources/read`. It accepts at most 32 links per result, snapshots each complete
-typed resource response under finite per-resource and aggregate byte quotas,
-and stages all snapshot capacity before returning the tool result.
+`resources/read`. Resource links and embedded resources together are limited to
+32 resource-bearing blocks per result. Tappet snapshots each complete typed
+resource response under finite per-resource and aggregate byte quotas and
+stages all snapshot capacity before returning the tool result.
 The block URI is then rewritten to an unguessable
 `tappet-resource://<opaque-handle>` URI. All other block fields remain
 unchanged. Before computing the snapshot encoding or digest, Tappet also
 rewrites every standard `ResourceContents.uri` field in the downstream
 `resources/read` response to that broker URI, or to an opaque child URI backed
 by the same snapshot. Other typed resource-content fields remain unchanged.
+
+An embedded-resource block already contains its typed resource content, so it
+does not require a second provider read. Before sizing, spilling, or publishing
+the invocation result, Tappet snapshots that content, replaces every standard
+`ResourceContents.uri` with a distinct opaque broker URI backed by the
+snapshot, and retains every other typed field unchanged. Resource links and
+embedded resources share that count limit, the aggregate snapshot-byte quota,
+publication transaction, handle lifetime, and scoped `resources/read` route. An
+embedded resource that would exceed those bounds fails materialization rather
+than exposing a provider URI.
+
 The original provider URI and any provider-originated nested content URI exist
-only in bounded transient call state
-while Tappet performs `resources/read`; they are treated as possible signed or
+only in bounded transient call state while Tappet adapts an embedded resource or
+performs `resources/read`; they are treated as possible signed or
 credential-bearing secrets and are excluded from telemetry. After the read
 completes or fails, Tappet discards every plaintext provider URI. Neither the
 typed snapshot nor its stored encoding retains one. The snapshot record retains
-only an irreversible keyed digest of the requested provider URI for correlation,
+only an irreversible keyed digest of the original provider URI for correlation,
 plus the provider fingerprint, content digest, and invocation ID. The digest is
 never accepted as a read route and stale checks do not require the original URI.
 
@@ -728,10 +742,14 @@ broker-adapted typed resource contents without restarting or consulting the
 provider; only the standard URI fields differ from the downstream response.
 `resources/list` does not enumerate ephemeral handles, and arbitrary provider
 URIs are rejected; possession of the broker-issued URI is required. A snapshot
-is admitted only when its complete `resources/read` response fits the broker
-resource-response limit, so this route never truncates or flattens resource
-contents. Handles are bearer secrets excluded from telemetry and have bounded
-lifetimes independent of provider connections.
+is admitted only when the exact compact encoding of its complete outward
+JSON-RPC `resources/read` response, including the broker-adapted typed content,
+URI rewrites, and outer envelope, fits the 1 MiB broker-response ceiling. Stored
+content bytes alone are not the admission measurement. This route does not
+chunk, truncate, or flatten resource contents, so any snapshot whose complete
+read response would exceed the ceiling fails before a handle is published.
+Handles are bearer secrets excluded from telemetry and have bounded lifetimes
+independent of provider connections.
 
 For an inline result, every associated resource handle remains live for at
 least five minutes after result publication. For a spilled result, its resource
@@ -747,10 +765,11 @@ It releases unused retention after completion or abandonment. If it cannot
 reserve that linked lifetime, invocation fails before any handle is published.
 Reading a resource does not renew it indefinitely.
 
-If the provider does not support `resources/read`, the link cannot be read in
-the current session, any link or byte quota is exceeded, or snapshot admission
-fails, `invoke` returns a bounded `resource_link_unmaterializable` preservation
-error. Because the downstream `tools/call` has already returned at this point,
+If the provider does not support `resources/read`, a link cannot be read in the
+current session, any resource count or byte quota is exceeded, or snapshot
+admission fails, `invoke` returns a bounded `resource_link_unmaterializable` or
+`embedded_resource_unmaterializable` preservation error matching the offending
+block. Because the downstream `tools/call` has already returned at this point,
 the error explicitly reports `provider_call_state: "completed"`, the original
 `provider_is_error` value, `provider_result_published: false`, and
 `retry_safe: false`, along with the invocation ID. The broker-generated
