@@ -78,6 +78,31 @@ func TestProviderLifecycleIsLazyAndReusable(t *testing.T) {
 	assert.Equal(t, []string{"start:provider-a", "initialize:provider-a", "call:actual_tool", "call:actual_tool", "close:provider-a"}, recorder.snapshot())
 }
 
+func TestOrdinaryStdioProviderStartsBeforeInitialize(t *testing.T) {
+	const fixtureEnv = "TAPPET_STDIO_START_FIXTURE"
+	if os.Getenv(fixtureEnv) == "1" {
+		fixture := mcpserver.NewMCPServer("stdio-start-fixture", "test")
+		_ = mcpserver.ServeStdio(fixture)
+		os.Exit(0)
+	}
+
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	registry := NewServerRegistry(map[string]*config.MCPClientConfigV2{
+		"provider-a": {
+			TransportType: config.MCPClientTypeStdio,
+			Command:       executable,
+			Args:          []string{"-test.run=^TestOrdinaryStdioProviderStartsBeforeInitialize$"},
+			Env:           map[string]string{fixtureEnv: "1"},
+		},
+	})
+	t.Cleanup(registry.Close)
+
+	provider, err := registry.GetOrLoadServer(context.Background(), "provider-a")
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+}
+
 func TestSSEProviderOutlivesTriggeringRequest(t *testing.T) {
 	downstream := mcpserver.NewMCPServer("sse-provider", "test")
 	downstream.AddTool(mcp.NewTool("actual_tool"), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

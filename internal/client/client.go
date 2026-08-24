@@ -68,7 +68,12 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 		}
 		managed := &managedCommand{}
 		stdioTransport := transport.NewStdioWithOptions(value.Command, envs, value.Args, transport.WithCommandFunc(managed.command))
-		return &Client{name: name, client: client.NewClient(stdioTransport), closeFailed: managed.terminate}, nil
+		return &Client{
+			name:            name,
+			needManualStart: true,
+			client:          client.NewClient(stdioTransport),
+			closeFailed:     managed.terminate,
+		}, nil
 
 	case *config.SSEMCPClientConfig:
 		var options []transport.ClientOption

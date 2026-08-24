@@ -33,6 +33,17 @@ func TestFailedStdioCleanupKillsAndReapsProvider(t *testing.T) {
 	require.NoError(t, provider.CloseFailed(ctx))
 }
 
+func TestStdioClientRequiresManualStart(t *testing.T) {
+	provider, err := NewMCPClient("deferred-stdio", &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeStdio,
+		Command:       "command-that-does-not-exist",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, provider.NeedManualStart())
+	require.NoError(t, provider.CloseFailed(context.Background()))
+}
+
 func TestPingTaskContinuesAfterProviderLocalTimeout(t *testing.T) {
 	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
 	defer cancelLifecycle()
