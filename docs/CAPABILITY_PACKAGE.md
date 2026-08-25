@@ -205,13 +205,11 @@ metadata: ID, media type, byte count, digest, and the exact artifact reference.
 chunks. A changed package or skill produces a new reference; an old binding
 returns a typed stale-reference result instead of resolving by current path.
 
-Tappet should index:
-
-- `name`
-- `description`
-- package-relative path
-- digest
-- optional compatibility metadata
+Tappet indexes only the skill `name` and `description` for discovery. Package
+paths, digests, license, compatibility, `allowed-tools`, arbitrary skill
+metadata, and resource metadata remain excluded from search. The complete
+Milestone 3 field allowlist is fixed by
+[`MILESTONE_3_SEARCH_CONTRACT.md`](MILESTONE_3_SEARCH_CONTRACT.md).
 
 Tappet should defer:
 

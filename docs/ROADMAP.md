@@ -118,6 +118,10 @@ Exit criteria:
 
 Outcome: an agent can find a capability without loading its schemas or skill body.
 
+The accepted [`lexical-v1` search contract](MILESTONE_3_SEARCH_CONTRACT.md)
+defines identifier matching, path filtering, indexed fields, normalization,
+ordering, relevance, corpus judgments, and corpus change control.
+
 Work:
 
 - compact capability cards
@@ -134,7 +138,7 @@ Work:
 Initial benchmark corpus:
 
 - exact capability IDs
-- exact operation names
+- exact fully qualified operation IDs
 - natural-language task descriptions
 - ambiguous cross-domain requests
 - negative/no-match requests
@@ -142,7 +146,9 @@ Initial benchmark corpus:
 Exit criteria:
 
 - 100% exact-ID recall
-- agreed top-5 natural-language recall target on a versioned corpus
+- 100% natural-language Success@5 on the versioned acceptance corpus
+- 100% per-query Recall@5 and Precision@5 for exhaustively judged ambiguous
+  acceptance queries
 - no unrelated full skill bodies or operation schemas in search output
 - `describe` returns bounded package structure without requiring provider
   metadata or starting a provider

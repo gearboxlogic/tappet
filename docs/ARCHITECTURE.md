@@ -109,7 +109,7 @@ The Agent Skills `allowed-tools` field is experimental and must not be interpret
 An operation is the capability-facing action. A tool is the provider-specific implementation.
 
 ```text
-operation: software.github.ci.inspect-failed-checks
+operation: software.github.ci-debugging/inspect-failed-checks
 provider: github
 target: get_check_runs
 ```
@@ -261,21 +261,29 @@ V1 can be in-memory after loading manifests. A database is not required for corr
 
 Resolution should combine hierarchy and search without requiring an LLM.
 
+Milestone 3 search follows the accepted
+[`lexical-v1` contract](MILESTONE_3_SEARCH_CONTRACT.md). That contract fixes the
+canonical fully qualified operation ID, path-filter precedence, searchable
+field allowlist, Unicode normalization, integer ordering key, relevance floor,
+benchmark judgments, and corpus change rules.
+
 Recommended initial ranking:
 
 1. exact capability or operation ID
 2. exact normalized name
-3. exact alias or tag
+3. exact tag, local operation ID, or skill name
 4. lexical match over name and description
 5. lexical match over operation summaries and skill descriptions
 
 Exact matches must be pinned ahead of top-K ranked results.
 
 The final order is deterministic: sort first by the match tier above, then by
-lexical score descending within a tier, then by fully qualified capability ID
-in ascending UTF-8 byte order. The ID tie-break is applied before `limit` or
-cursor pagination, so map iteration, database rebuilds, and equal-score cards
-cannot change which top-K results are returned.
+the versioned integer lexical score descending within a tier, then by fully
+qualified capability ID in ascending UTF-8 byte order. The ID tie-break is
+applied before `limit` or cursor pagination, so map iteration, database
+rebuilds, and equal-score cards cannot change which top-K results are returned.
+Scores are not probabilities and are not comparable across match tiers or
+ranking versions.
 
 Start with deterministic lexical search. SQLite FTS5/BM25 is reasonable when catalog size warrants it; an in-memory index is sufficient for the first vertical slice. Embeddings should be an optional later index evaluated against a fixed retrieval corpus.
 
@@ -284,7 +292,7 @@ Search results should include:
 ```text
 score
 match kind
-matched fields
+primary matched field
 hierarchy path
 ```
 
