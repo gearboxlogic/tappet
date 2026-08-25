@@ -46,7 +46,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-everything"
+        "@modelcontextprotocol/server-everything@2025.9.25"
       ],
       "env": {}
     }

@@ -1,6 +1,8 @@
 # Configuration
 
 Tappet reads JSON from a local file or an HTTP(S) URL. Environment expansion is enabled by default.
+Pin provider package versions when a checked-in hierarchy depends on their tool
+names and schemas. Update the pin and regenerate the hierarchy together.
 
 ```json
 {
@@ -20,7 +22,7 @@ Tappet reads JSON from a local file or an HTTP(S) URL. Environment expansion is 
     "everything": {
       "transportType": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-everything"],
+      "args": ["-y", "@modelcontextprotocol/server-everything@2025.9.25"],
       "env": {},
       "options": {}
     }

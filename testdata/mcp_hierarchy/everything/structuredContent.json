@@ -5,6 +5,8 @@
       "maps_to": "structuredContent",
       "server": "everything",
       "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
         "properties": {
           "location": {
             "description": "City name or zip code",
@@ -14,6 +16,30 @@
         },
         "required": [
           "location"
+        ],
+        "type": "object"
+      },
+      "outputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "conditions": {
+            "description": "Weather conditions description",
+            "type": "string"
+          },
+          "humidity": {
+            "description": "Humidity percentage",
+            "type": "number"
+          },
+          "temperature": {
+            "description": "Temperature in celsius",
+            "type": "number"
+          }
+        },
+        "required": [
+          "temperature",
+          "conditions",
+          "humidity"
         ],
         "type": "object"
       }

@@ -5,6 +5,8 @@
       "maps_to": "getResourceReference",
       "server": "everything",
       "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
         "properties": {
           "resourceId": {
             "description": "ID of the resource to reference (1-100)",
