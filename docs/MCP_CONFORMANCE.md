@@ -4,6 +4,8 @@ Status: **Milestone 1 recorded matrix**
 
 Recorded: 2026-08-24
 
+Last verified: 2026-08-25
+
 Tappet pins `@modelcontextprotocol/conformance@0.2.0-alpha.11` and runs the
 frozen `2025-11-25` and `2026-07-28` requirements in both server and client
 roles. Run the same gate locally with:
@@ -37,6 +39,11 @@ OAuth, callback-driven multi-round-trip behavior that Tappet does not
 advertise, and optional legacy standalone-GET stream resumption. The modern
 client still passes MRTR isolation and default-result checks while rejecting
 the callback-dependent rounds.
+
+The 2026-07-28 outward-server result records subscription checks as skipped.
+Tappet advertises no subscription-delivered capability, so those checks are not
+applicable; direct manual requests to the unadvertised subscription method
+return method-not-found promptly.
 
 ## Transport matrix
 

@@ -5,6 +5,8 @@ Status: **complete as of 2026-08-24**
 This audit maps every Milestone 1 roadmap commitment to executable evidence.
 Official-suite totals and expected-failure scope are recorded separately in
 [MCP conformance](MCP_CONFORMANCE.md).
+The [manual acceptance record](MILESTONE_1_MANUAL_ACCEPTANCE.md) passed on
+2026-08-25 after detecting and repairing demo-provider version drift.
 
 ## Work items
 

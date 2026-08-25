@@ -41,7 +41,9 @@ Status: **complete as of 2026-08-24**. See the
 [recorded conformance matrix](MCP_CONFORMANCE.md) and
 [SDK decision](MCP_UPGRADE_DECISION.md). The
 [completion audit](MILESTONE_1_AUDIT.md) maps every work item and exit
-criterion to executable evidence.
+criterion to executable evidence. The
+[manual acceptance record](MILESTONE_1_MANUAL_ACCEPTANCE.md) passed on
+2026-08-25.
 
 Outcome: Tappet can serve a modern fixed broker surface and communicate with modern and legacy downstream providers.
 
