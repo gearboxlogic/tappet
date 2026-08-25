@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"sync"
 
@@ -43,7 +44,31 @@ func modernMetadataError(message []byte) (json.RawMessage, string, bool) {
 		fmt.Sprintf("missing or invalid _meta field %s", mcp.MetaKeyClientCapabilities), true
 }
 
-func modernMetadataErrorResponse(id json.RawMessage, message string) []byte {
+// Tappet advertises no subscription-delivered capabilities. Rejecting the
+// optional subscriptions/listen method is preferable to letting mcp-go open
+// an empty stream: mcp-go v1.0.0-beta.1 races the acknowledgement against the
+// final response when the accepted filter is empty, so the acknowledgement can
+// be lost. The official conformance runner accepts method-not-found when
+// discovery advertises no applicable capability.
+func modernUnsupportedSubscription(message []byte) (json.RawMessage, string, bool) {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Method mcp.MCPMethod   `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(message, &envelope); err != nil || envelope.Method != mcp.MethodSubscriptionsListen {
+		return nil, "", false
+	}
+	var params struct {
+		Meta mcp.Meta `json:"_meta"`
+	}
+	if json.Unmarshal(envelope.Params, &params) != nil || !mcp.IsModernProtocol(params.Meta.ProtocolVersion()) {
+		return nil, "", false
+	}
+	return envelope.ID, params.Meta.ProtocolVersion(), true
+}
+
+func modernProtocolErrorResponse(id json.RawMessage, code int, message string) []byte {
 	response := struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
@@ -55,7 +80,7 @@ func modernMetadataErrorResponse(id json.RawMessage, message string) []byte {
 	if len(response.ID) == 0 {
 		response.ID = json.RawMessage("null")
 	}
-	response.Error.Code = mcp.INVALID_PARAMS
+	response.Error.Code = code
 	response.Error.Message = message
 	encoded, _ := json.Marshal(response)
 	return encoded
@@ -74,15 +99,26 @@ func modernMetadataValidationMiddleware(next http.Handler) http.Handler {
 		}
 		_ = r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		id, message, invalid := modernMetadataError(body)
-		if !invalid {
-			next.ServeHTTP(w, r)
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if id, message, invalid := modernMetadataError(body); invalid {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(mcp.HeaderProtocolVersion, mcp.LATEST_PROTOCOL_VERSION)
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write(modernProtocolErrorResponse(id, mcp.INVALID_PARAMS, message))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set(mcp.HeaderProtocolVersion, mcp.LATEST_PROTOCOL_VERSION)
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write(modernMetadataErrorResponse(id, message))
+		if id, version, unsupported := modernUnsupportedSubscription(body); unsupported &&
+			mediaType == "application/json" &&
+			r.Header.Get(mcp.HeaderProtocolVersion) == version &&
+			r.Header.Get(mcp.HeaderMethod) == string(mcp.MethodSubscriptionsListen) &&
+			r.Header.Get(mcp.HeaderLastEventID) == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(mcp.HeaderProtocolVersion, version)
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write(modernProtocolErrorResponse(id, mcp.METHOD_NOT_FOUND, "Method not found"))
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -130,20 +166,31 @@ func (r *protocolValidationReader) Read(buffer []byte) (int, error) {
 		if len(line) == 0 {
 			return 0, err
 		}
-		id, message, invalid := modernMetadataError(bytes.TrimSpace(line))
-		if !invalid {
-			r.pending = line
-			r.pendingErr = err
-			count := copy(buffer, r.pending)
-			r.pending = r.pending[count:]
-			return count, nil
+		messageBytes := bytes.TrimSpace(line)
+		if id, message, invalid := modernMetadataError(messageBytes); invalid {
+			response := append(modernProtocolErrorResponse(id, mcp.INVALID_PARAMS, message), '\n')
+			if _, writeErr := r.writer.Write(response); writeErr != nil {
+				return 0, writeErr
+			}
+			if err != nil {
+				return 0, err
+			}
+			continue
 		}
-		response := append(modernMetadataErrorResponse(id, message), '\n')
-		if _, writeErr := r.writer.Write(response); writeErr != nil {
-			return 0, writeErr
+		if id, _, unsupported := modernUnsupportedSubscription(messageBytes); unsupported {
+			response := append(modernProtocolErrorResponse(id, mcp.METHOD_NOT_FOUND, "Method not found"), '\n')
+			if _, writeErr := r.writer.Write(response); writeErr != nil {
+				return 0, writeErr
+			}
+			if err != nil {
+				return 0, err
+			}
+			continue
 		}
-		if err != nil {
-			return 0, err
-		}
+		r.pending = line
+		r.pendingErr = err
+		count := copy(buffer, r.pending)
+		r.pending = r.pending[count:]
+		return count, nil
 	}
 }

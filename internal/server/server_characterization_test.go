@@ -146,6 +146,33 @@ func TestModernMetadataValidationPassesValidCapabilitiesUnchanged(t *testing.T) 
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
 }
 
+func TestModernHTTPRejectsUnadvertisedSubscriptionsWithoutOpeningStream(t *testing.T) {
+	requestBody := []byte(`{"jsonrpc":"2.0","id":106,"method":"subscriptions/listen","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"notifications":{"toolsListChanged":true}}}`)
+	srv := newCharacterizationServer(t)
+	handler := modernMetadataValidationMiddleware(
+		mcpserver.NewStreamableHTTPServer(srv, mcpserver.WithStateLess(true)),
+	)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(mcp.HeaderProtocolVersion, mcp.ProtocolVersion20260728)
+	request.Header.Set(mcp.HeaderMethod, string(mcp.MethodSubscriptionsListen))
+
+	handler.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+	var response struct {
+		ID    int `json:"id"`
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, 106, response.ID)
+	assert.Equal(t, mcp.METHOD_NOT_FOUND, response.Error.Code)
+}
+
 func TestProtocolValidationReaderRejectsMalformedModernFrameAndContinues(t *testing.T) {
 	invalid := `{"jsonrpc":"2.0","id":104,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`
 	valid := `{"jsonrpc":"2.0","id":105,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
@@ -163,6 +190,27 @@ func TestProtocolValidationReaderRejectsMalformedModernFrameAndContinues(t *test
 	}
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(responses.Bytes()), &response))
 	assert.Equal(t, mcp.INVALID_PARAMS, response.Error.Code)
+}
+
+func TestProtocolValidationReaderRejectsUnadvertisedSubscriptionsAndContinues(t *testing.T) {
+	unsupported := `{"jsonrpc":"2.0","id":106,"method":"subscriptions/listen","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"notifications":{"toolsListChanged":true}}}`
+	valid := `{"jsonrpc":"2.0","id":107,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
+	var responses bytes.Buffer
+	reader := newProtocolValidationReader(bytes.NewBufferString(unsupported+"\n"+valid+"\n"), &responses)
+
+	forwarded, err := io.ReadAll(reader)
+
+	require.NoError(t, err)
+	assert.Equal(t, valid+"\n", string(forwarded))
+	var response struct {
+		ID    int `json:"id"`
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(responses.Bytes()), &response))
+	assert.Equal(t, 106, response.ID)
+	assert.Equal(t, mcp.METHOD_NOT_FOUND, response.Error.Code)
 }
 
 func TestTappetStreamableHTTPNegotiatesModernStatelessProtocol(t *testing.T) {
