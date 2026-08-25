@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	tappetclient "github.com/gearboxlogic/tappet/internal/client"
 	"github.com/gearboxlogic/tappet/internal/config"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -103,18 +105,162 @@ func TestOrdinaryStdioProviderStartsBeforeInitialize(t *testing.T) {
 	require.NotNil(t, provider)
 }
 
-func TestSSEProviderOutlivesTriggeringRequest(t *testing.T) {
+func TestProviderClientNegotiatesModernAndLegacyStreamableHTTP(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     []mcpserver.StreamableHTTPOption
+		wantVersion string
+		wantModern  bool
+	}{
+		{
+			name:        "modern stateless provider",
+			wantVersion: mcp.ProtocolVersion20260728,
+			wantModern:  true,
+		},
+		{
+			name: "legacy-only provider",
+			options: []mcpserver.StreamableHTTPOption{
+				mcpserver.WithStreamableHTTPProtocolVersions(mcp.LegacyProtocolVersions()...),
+			},
+			wantVersion: mcp.ProtocolVersion20251125,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			downstream := mcpserver.NewMCPServer("provider-fixture", "test")
+			downstream.AddTool(mcp.NewTool("actual_tool"), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				assert.Equal(t, test.wantVersion, mcpserver.RequestProtocolVersion(ctx))
+				assert.Equal(t, test.wantModern, mcpserver.IsModernRequest(ctx))
+				if test.wantModern {
+					info := mcpserver.RequestProtocolInfoFromContext(ctx)
+					require.NotNil(t, info)
+					require.NotNil(t, info.ClientCapabilities)
+					assert.Nil(t, info.ClientCapabilities.Sampling)
+					assert.Nil(t, info.ClientCapabilities.Elicitation)
+					assert.Nil(t, info.ClientCapabilities.Roots)
+				}
+				return mcp.NewToolResultText(test.wantVersion), nil
+			})
+			httpServer := httptest.NewServer(mcpserver.NewStreamableHTTPServer(downstream, test.options...))
+			t.Cleanup(httpServer.Close)
+
+			lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+			t.Cleanup(cancelLifecycle)
+			provider, err := newProviderClient(t.Context(), lifecycleCtx, "provider-fixture", &config.MCPClientConfigV2{
+				TransportType: config.MCPClientTypeStreamable,
+				URL:           httpServer.URL,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+			request := mcp.CallToolRequest{}
+			request.Params.Name = "actual_tool"
+			result, err := provider.CallTool(t.Context(), request)
+			require.NoError(t, err)
+			require.Len(t, result.Content, 1)
+			assert.Equal(t, test.wantVersion, result.Content[0].(mcp.TextContent).Text)
+		})
+	}
+}
+
+func TestProviderClientPreservesTypedToolResult(t *testing.T) {
+	downstream := mcpserver.NewMCPServer("typed-result-provider", "test")
+	downstream.AddTool(mcp.NewTool("actual_tool"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result := &mcp.CallToolResult{
+			Content: []mcp.Content{
+				mcp.NewTextContent("provider result"),
+			},
+			StructuredContent: map[string]any{
+				"status": "denied",
+				"count":  json.Number("9007199254740993"),
+			},
+			IsError: true,
+		}
+		result.Meta = mcp.NewMetaFromMap(map[string]any{"provider-trace": "trace-123"})
+		return result, nil
+	})
+	httpServer := httptest.NewServer(mcpserver.NewStreamableHTTPServer(downstream))
+	t.Cleanup(httpServer.Close)
+
+	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+	t.Cleanup(cancelLifecycle)
+	provider, err := newProviderClient(t.Context(), lifecycleCtx, "typed-result-provider", &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeStreamable,
+		URL:           httpServer.URL,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "actual_tool"
+	result, err := provider.CallTool(t.Context(), request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.IsError)
+	assert.Equal(t, mcp.ResultTypeComplete, result.ResultType)
+	require.Len(t, result.Content, 1)
+	assert.Equal(t, "provider result", result.Content[0].(mcp.TextContent).Text)
+	assert.JSONEq(t, `{"status":"denied","count":9007199254740993}`, string(result.RawStructuredContent))
+	require.NotNil(t, result.Meta)
+	assert.Equal(t, "trace-123", result.Meta.AdditionalFields["provider-trace"])
+}
+
+func TestProviderClientRejectsUnsupportedMultiRoundTripInput(t *testing.T) {
+	downstream := mcpserver.NewMCPServer("callback-provider", "test")
+	downstream.AddTool(mcp.NewTool("actual_tool"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			Result: mcp.Result{ResultType: mcp.ResultTypeInputRequired},
+			MultiRoundTripResult: mcp.MultiRoundTripResult{
+				InputRequests: mcp.InputRequests{
+					"sample": mcp.NewSamplingInputRequest(mcp.CreateMessageParams{}),
+				},
+				RequestState: "opaque-provider-state",
+			},
+		}, nil
+	})
+	httpServer := httptest.NewServer(mcpserver.NewStreamableHTTPServer(downstream))
+	t.Cleanup(httpServer.Close)
+
+	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+	t.Cleanup(cancelLifecycle)
+	provider, err := newProviderClient(t.Context(), lifecycleCtx, "callback-provider", &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeStreamable,
+		URL:           httpServer.URL,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "actual_tool"
+	started := time.Now()
+	result, err := provider.CallTool(t.Context(), request)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no sampling handler configured")
+	assert.Less(t, time.Since(started), time.Second)
+}
+
+func TestSSEProviderReceivesConfiguredHeadersAndOutlivesTriggeringRequest(t *testing.T) {
+	const authorization = "Bearer sse-provider-credential-539dbc"
+	var receivedAuthorization atomic.Bool
 	downstream := mcpserver.NewMCPServer("sse-provider", "test")
 	downstream.AddTool(mcp.NewTool("actual_tool"), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultText("ok"), nil
 	})
-	testServer := mcpserver.NewTestServer(downstream)
+	testServer := mcpserver.NewTestServer(downstream, mcpserver.WithSSEContextFunc(func(ctx context.Context, request *http.Request) context.Context {
+		if request.Header.Get("Authorization") == authorization {
+			receivedAuthorization.Store(true)
+		}
+		return ctx
+	}))
 	t.Cleanup(testServer.Close)
 
 	configs := characterizationConfigs()
 	configs["provider-a"] = &config.MCPClientConfigV2{
 		TransportType: config.MCPClientTypeSSE,
 		URL:           testServer.URL + "/sse",
+		Headers:       map[string]string{"Authorization": authorization},
 	}
 	registry := NewServerRegistry(configs)
 	defer registry.Close()
@@ -124,6 +270,7 @@ func TestSSEProviderOutlivesTriggeringRequest(t *testing.T) {
 	result, err := h.HandleExecuteTool(triggerCtx, registry, "alpha.nested.public_tool", nil)
 	require.NoError(t, err)
 	require.False(t, result.IsError)
+	assert.True(t, receivedAuthorization.Load())
 	cancelTrigger()
 
 	// The triggering request's derived invocation context is canceled when the
@@ -628,6 +775,30 @@ func TestDownstreamErrorsAndStructuredResultsArePreserved(t *testing.T) {
 		assert.Contains(t, err.Error(), "downstream rpc failure")
 		assert.Contains(t, err.Error(), "Expected inputSchema")
 		assert.Contains(t, err.Error(), "\"required\": [\n    \"value\"")
+	})
+
+	t.Run("typed JSON-RPC error becomes a faithful tool error", func(t *testing.T) {
+		factory := func(context.Context, string, *config.MCPClientConfigV2) (ProviderClient, error) {
+			return ProviderClientFunc(func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return nil, &tappetclient.ProviderRPCError{
+					Code:    -32042,
+					Message: "permission denied",
+					Data:    json.RawMessage(`{"account":9007199254740993}`),
+				}
+			}), nil
+		}
+		registry := newServerRegistry(characterizationConfigs(), factory)
+		defer registry.Close()
+
+		result, err := h.HandleExecuteTool(context.Background(), registry, "alpha.nested.public_tool", nil)
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Equal(t, mcp.ResultTypeComplete, result.ResultType)
+		assert.JSONEq(t, `{"provider_error":{"code":-32042,"message":"permission denied","data":{"account":9007199254740993}}}`, string(result.RawStructuredContent))
+		text, ok := mcp.AsTextContent(result.Content[0])
+		require.True(t, ok)
+		assert.Contains(t, text.Text, "provider JSON-RPC error -32042: permission denied")
+		assert.Contains(t, text.Text, "Expected inputSchema")
 	})
 
 	t.Run("isError result keeps structured and non-text content", func(t *testing.T) {

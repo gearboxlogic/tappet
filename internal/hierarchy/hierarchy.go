@@ -417,7 +417,7 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	defer cancel()
 
 	// Get or load the MCP client for this server
-	client, err := registry.GetOrLoadServer(toolCtx, serverName)
+	providerClient, err := registry.GetOrLoadServer(toolCtx, serverName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MCP client: %w", err)
 	}
@@ -432,7 +432,8 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 
 	// Serialize tool calls to the same server to prevent concurrent stdio access.
 	// Stdio is a single-channel transport that cannot handle interleaved messages.
-	// This protects mcp-go v0.43.2 stdio writes, which are not framed by a transport write mutex.
+	// Keep one invocation active per provider until provider concurrency policy
+	// becomes explicit; transport write safety alone does not define provider semantics.
 	mutex := registry.GetClientMutex(serverName)
 	if err := mutex.LockContext(toolCtx); err != nil {
 		return nil, fmt.Errorf("failed to wait for provider %s: %w", serverName, err)
@@ -444,8 +445,12 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	callRequest.Params.Name = actualToolName
 	callRequest.Params.Arguments = arguments
 
-	result, err := client.CallTool(toolCtx, callRequest)
+	result, err := providerClient.CallTool(toolCtx, callRequest)
 	if err != nil {
+		var rpcErr *client.ProviderRPCError
+		if errors.As(err, &rpcErr) {
+			return providerRPCErrorResult(rpcErr, toolDef.InputSchema), nil
+		}
 		// Include inputSchema in error message to help LLMs self-correct parameter mistakes
 		if toolDef.InputSchema != nil {
 			schemaJSON, marshalErr := json.MarshalIndent(toolDef.InputSchema, "", "  ")
@@ -469,6 +474,29 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 		}
 	}
 	return result, nil
+}
+
+type providerRPCErrorPayload struct {
+	ProviderError *client.ProviderRPCError `json:"provider_error"`
+}
+
+func providerRPCErrorResult(rpcErr *client.ProviderRPCError, inputSchema map[string]interface{}) *mcp.CallToolResult {
+	message := rpcErr.Error()
+	if inputSchema != nil {
+		if schemaJSON, err := json.MarshalIndent(inputSchema, "", "  "); err == nil {
+			message += fmt.Sprintf("\n\nExpected inputSchema:\n%s", schemaJSON)
+		}
+	}
+	raw, _ := json.Marshal(providerRPCErrorPayload{ProviderError: rpcErr})
+	var structured any
+	_ = json.Unmarshal(raw, &structured)
+	return &mcp.CallToolResult{
+		Result:               mcp.Result{ResultType: mcp.ResultTypeComplete},
+		Content:              []mcp.Content{mcp.NewTextContent(message)},
+		StructuredContent:    structured,
+		RawStructuredContent: raw,
+		IsError:              true,
+	}
 }
 
 // ServerRegistry manages MCP client connections
@@ -656,8 +684,8 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		if err := mcpClient.GetClient().Start(startCtx); err != nil {
 			startCtx.abort()
 			closeFailedProvider(serverName, mcpClient, failedProviderCleanupTimeout)
-			if ctx.Err() != nil {
-				return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctx.Err()))
+			if ctxErr := elapsedContextError(ctx); ctxErr != nil {
+				return nil, fmt.Errorf("failed to start MCP client: %w", markProviderLoadCanceledByInitiator(ctxErr))
 			}
 			return nil, fmt.Errorf("failed to start MCP client: %w", err)
 		}
@@ -690,6 +718,20 @@ func newProviderClient(ctx, lifecycleCtx context.Context, serverName string, cfg
 		go mcpClient.StartPingTask(lifecycleCtx)
 	}
 	return mcpClient, nil
+}
+
+// elapsedContextError also recognizes a deadline that has elapsed just before
+// the context runtime publishes Done. Transport implementations may return
+// their own timeout at that boundary, but callers still need the invocation's
+// deadline classification.
+func elapsedContextError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // providerStartContext observes the invocation deadline until Start succeeds.

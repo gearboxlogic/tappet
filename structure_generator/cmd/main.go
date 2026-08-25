@@ -77,8 +77,10 @@ func (p *catalogToolsPage) UnmarshalJSON(data []byte) error {
 }
 
 type transportCatalogClient struct {
-	client    *mcpclient.Client
-	requestID atomic.Uint64
+	client             *mcpclient.Client
+	requestID          atomic.Uint64
+	clientInfo         mcp.Implementation
+	clientCapabilities mcp.ClientCapabilities
 }
 
 func (c *transportCatalogClient) Start(ctx context.Context) error {
@@ -86,16 +88,46 @@ func (c *transportCatalogClient) Start(ctx context.Context) error {
 }
 
 func (c *transportCatalogClient) Initialize(ctx context.Context, request mcp.InitializeRequest) (*mcp.InitializeResult, error) {
-	return c.client.Initialize(ctx, request)
+	result, err := c.client.Initialize(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	c.clientInfo = request.Params.ClientInfo
+	c.clientCapabilities = request.Params.Capabilities
+	return result, nil
 }
 
 func (c *transportCatalogClient) ListToolsByPage(ctx context.Context, request mcp.ListToolsRequest) (*catalogToolsPage, error) {
+	params := request.Params
+	header := request.Header.Clone()
+	protocolVersion := c.client.ProtocolVersion()
+	if mcp.IsModernProtocol(protocolVersion) {
+		if params.Meta == nil {
+			params.Meta = &mcp.Meta{}
+		}
+		params.Meta.SetProtocolVersion(protocolVersion)
+		params.Meta.SetClientCapabilities(c.clientCapabilities)
+		if c.clientInfo.Name != "" {
+			params.Meta.SetClientInfo(c.clientInfo)
+		}
+		encodedParams, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode tools/list parameters: %w", err)
+		}
+		if header == nil {
+			header = make(map[string][]string)
+		}
+		for name, value := range mcp.StandardHeaders(protocolVersion, mcp.MethodToolsList, encodedParams) {
+			header.Set(name, value)
+		}
+	}
+
 	response, err := c.client.GetTransport().SendRequest(ctx, mcptransport.JSONRPCRequest{
 		JSONRPC: mcp.JSONRPC_VERSION,
 		ID:      mcp.NewRequestId(fmt.Sprintf("tappet-inventory-%d", c.requestID.Add(1))),
 		Method:  "tools/list",
-		Params:  request.Params,
-		Header:  request.Header,
+		Params:  params,
+		Header:  header,
 	})
 	if err != nil {
 		return nil, mcptransport.NewError(err)
@@ -454,6 +486,13 @@ func convertTool(data json.RawMessage) (generator.Tool, error) {
 	if err := tappetclient.RejectDuplicateJSONMembers(data); err != nil {
 		return generator.Tool{}, fmt.Errorf("invalid tool metadata: %w", err)
 	}
+	var providerTool mcp.Tool
+	if err := json.Unmarshal(data, &providerTool); err != nil {
+		return generator.Tool{}, err
+	}
+	if err := mcp.ValidateParamHeaderAnnotations(&providerTool); err != nil {
+		return generator.Tool{}, fmt.Errorf("tool %q has invalid x-mcp-header annotations: %w", providerTool.Name, err)
+	}
 	var fields struct {
 		Name         string                 `json:"name"`
 		Title        string                 `json:"title"`
@@ -494,6 +533,23 @@ func decodeServerTools(data []byte) (generator.ServerTools, error) {
 	decoder.UseNumber()
 	if err := decoder.Decode(&serverTools); err != nil {
 		return generator.ServerTools{}, err
+	}
+	for i := range serverTools.Tools {
+		encoded, err := json.Marshal(serverTools.Tools[i])
+		if err != nil {
+			return generator.ServerTools{}, fmt.Errorf("failed to validate tool at index %d: %w", i, err)
+		}
+		var providerTool mcp.Tool
+		if err := json.Unmarshal(encoded, &providerTool); err != nil {
+			return generator.ServerTools{}, fmt.Errorf("failed to validate tool at index %d: %w", i, err)
+		}
+		if err := mcp.ValidateParamHeaderAnnotations(&providerTool); err != nil {
+			return generator.ServerTools{}, fmt.Errorf(
+				"tool %q has invalid x-mcp-header annotations: %w",
+				serverTools.Tools[i].Name,
+				err,
+			)
+		}
 	}
 	return serverTools, nil
 }

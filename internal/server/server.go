@@ -94,7 +94,7 @@ func NewTappetServer(deps ServerDependencies) (*server.MCPServer, error) {
 	}
 
 	serverOpts := []server.ServerOption{
-		server.WithResourceCapabilities(true, true),
+		server.WithToolCapabilities(false),
 		server.WithRecovery(),
 	}
 	if deps.LogEnabled {
@@ -209,7 +209,11 @@ func StartStdioServer(cfg *config.Config) error {
 	}
 	defer registry.Close()
 	log.Printf("Starting Tappet (stdio server)")
-	return server.ServeStdio(mcpServer)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	stdout := &synchronizedWriter{writer: os.Stdout}
+	stdin := newProtocolValidationReader(os.Stdin, stdout)
+	return server.NewStdioServer(mcpServer).Listen(ctx, stdin, stdout)
 }
 
 // StartHTTPServer starts the HTTP server with the given configuration
@@ -240,6 +244,7 @@ func StartHTTPServer(cfg *config.Config) error {
 	default:
 		return fmt.Errorf("unknown server type: %s", cfg.McpProxy.Type)
 	}
+	handler = modernMetadataValidationMiddleware(handler)
 
 	// Apply middleware
 	middlewares := make([]MiddlewareFunc, 0)

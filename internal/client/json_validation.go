@@ -18,6 +18,18 @@ var (
 	ErrJSONNodesExceeded = errors.New("provider message JSON node count exceeded")
 )
 
+// ProviderRPCError preserves a downstream JSON-RPC error, including its
+// numeric code and the original JSON bytes of its optional data member.
+type ProviderRPCError struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+func (e *ProviderRPCError) Error() string {
+	return fmt.Sprintf("provider JSON-RPC error %d: %s", e.Code, e.Message)
+}
+
 const (
 	maxProviderJSONDepth = 128
 	maxProviderJSONNodes = 1_048_576
@@ -123,10 +135,16 @@ type responseValidation struct {
 	done chan struct{}
 	once sync.Once
 	err  error
+
+	rpcErrorMu sync.Mutex
+	rpcErrors  map[string]*ProviderRPCError
 }
 
 func newResponseValidation() *responseValidation {
-	return &responseValidation{done: make(chan struct{})}
+	return &responseValidation{
+		done:      make(chan struct{}),
+		rpcErrors: make(map[string]*ProviderRPCError),
+	}
 }
 
 func (v *responseValidation) fail(err error) {
@@ -148,5 +166,62 @@ func validateJSONMessage(data []byte, validation *responseValidation) error {
 		validation.fail(err)
 		return err
 	}
+	validation.recordRPCError(trimmed)
 	return nil
+}
+
+func (v *responseValidation) recordRPCError(data []byte) {
+	if v == nil {
+		return
+	}
+	var envelope struct {
+		ID    json.RawMessage `json:"id"`
+		Error *struct {
+			Code    int             `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Error == nil || len(envelope.ID) == 0 {
+		return
+	}
+	key, err := canonicalJSON(envelope.ID)
+	if err != nil {
+		return
+	}
+	rpcErr := &ProviderRPCError{
+		Code:    envelope.Error.Code,
+		Message: envelope.Error.Message,
+		Data:    append(json.RawMessage(nil), envelope.Error.Data...),
+	}
+	v.rpcErrorMu.Lock()
+	v.rpcErrors[key] = rpcErr
+	v.rpcErrorMu.Unlock()
+}
+
+func (v *responseValidation) takeRPCError(id any) *ProviderRPCError {
+	if v == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(id)
+	if err != nil {
+		return nil
+	}
+	key, err := canonicalJSON(encoded)
+	if err != nil {
+		return nil
+	}
+	v.rpcErrorMu.Lock()
+	defer v.rpcErrorMu.Unlock()
+	rpcErr := v.rpcErrors[key]
+	delete(v.rpcErrors, key)
+	return rpcErr
+}
+
+func canonicalJSON(data []byte) (string, error) {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		return "", err
+	}
+	return compact.String(), nil
 }

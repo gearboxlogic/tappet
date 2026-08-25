@@ -1,12 +1,16 @@
 package client
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -234,16 +238,167 @@ func TestLimitedStdioTransportRetainsInboundHandlersUntilStart(t *testing.T) {
 	assert.NotNil(t, recorder.requestHandler)
 }
 
-func TestResponseValidatingTransportForwardsRequestHandler(t *testing.T) {
+func TestResponseValidatingTransportDoesNotAdvertiseUnsupportedCallbacks(t *testing.T) {
 	stdioTransport := newLimitedStdioTransport("unused", nil, nil, 1_024)
 	validatingTransport := newResponseValidatingTransport(stdioTransport, stdioTransport.validation)
-	requestHandler := func(context.Context, transport.JSONRPCRequest) (*transport.JSONRPCResponse, error) {
-		return nil, nil
+
+	_, bidirectional := any(validatingTransport).(transport.BidirectionalInterface)
+	assert.False(t, bidirectional)
+}
+
+func TestProviderEventQueueOverflowIsBoundedAndClosesConnection(t *testing.T) {
+	validation := newResponseValidation()
+	var closed atomic.Int32
+	queue := newProviderEventQueue(validation, func() { closed.Add(1) })
+	block := make(chan struct{})
+	var active atomic.Int32
+	queue.setHandler(func(mcp.JSONRPCNotification) {
+		active.Add(1)
+		<-block
+	})
+	queue.start()
+	t.Cleanup(func() {
+		close(block)
+		queue.stop()
+	})
+
+	for range maxProviderEventHandlers {
+		queue.enqueue(mcp.JSONRPCNotification{})
+	}
+	require.Eventually(t, func() bool {
+		return active.Load() == maxProviderEventHandlers
+	}, time.Second, time.Millisecond)
+	for range maxProviderQueuedEvents + 1 {
+		queue.enqueue(mcp.JSONRPCNotification{})
 	}
 
-	validatingTransport.SetRequestHandler(requestHandler)
+	select {
+	case <-validation.done:
+		require.ErrorIs(t, validation.err, ErrProviderEventOverflow)
+	case <-time.After(time.Second):
+		t.Fatal("event overflow did not fail the provider connection")
+	}
+	require.Eventually(t, func() bool { return closed.Load() == 1 }, time.Second, time.Millisecond)
+}
 
-	assert.NotNil(t, stdioTransport.requestHandler)
+func TestProviderEventQueueByteOverflowClosesConnection(t *testing.T) {
+	validation := newResponseValidation()
+	var closed atomic.Int32
+	queue := newProviderEventQueue(validation, func() { closed.Add(1) })
+	block := make(chan struct{})
+	queue.setHandler(func(mcp.JSONRPCNotification) { <-block })
+	queue.start()
+	t.Cleanup(func() {
+		close(block)
+		queue.stop()
+	})
+
+	for range maxProviderEventHandlers {
+		queue.enqueue(mcp.JSONRPCNotification{})
+	}
+	large := mcp.JSONRPCNotification{Notification: mcp.Notification{
+		Method: strings.Repeat("x", maxProviderQueuedEventBytes/2),
+	}}
+	queue.enqueue(large)
+	queue.enqueue(large)
+
+	select {
+	case <-validation.done:
+		require.ErrorIs(t, validation.err, ErrProviderEventOverflow)
+	case <-time.After(time.Second):
+		t.Fatal("event byte overflow did not fail the provider connection")
+	}
+	require.Eventually(t, func() bool { return closed.Load() == 1 }, time.Second, time.Millisecond)
+}
+
+func TestResponseValidatingTransportPreservesToolRPCError(t *testing.T) {
+	validation := newResponseValidation()
+	require.NoError(t, validateJSONMessage([]byte(`{"jsonrpc":"2.0","id":7,"error":{"code":-32042,"message":"denied","data":{"account":9007199254740993}}}`), validation))
+	inner := &fixedResponseTransport{response: &transport.JSONRPCResponse{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		ID:      mcp.NewRequestId(7),
+		Error: &mcp.JSONRPCErrorDetails{
+			Code:    -32042,
+			Message: "denied",
+			Data:    map[string]any{"account": float64(9007199254740993)},
+		},
+	}}
+	validating := newResponseValidatingTransport(inner, validation)
+
+	response, err := validating.SendRequest(t.Context(), transport.JSONRPCRequest{
+		ID:     mcp.NewRequestId(7),
+		Method: string(mcp.MethodToolsCall),
+	})
+
+	assert.Nil(t, response)
+	var rpcErr *ProviderRPCError
+	require.ErrorAs(t, err, &rpcErr)
+	assert.Equal(t, -32042, rpcErr.Code)
+	assert.Equal(t, "denied", rpcErr.Message)
+	assert.JSONEq(t, `{"account":9007199254740993}`, string(rpcErr.Data))
+}
+
+func TestResponseValidatingTransportPreservesUnsupportedVersionData(t *testing.T) {
+	validation := newResponseValidation()
+	require.NoError(t, validateJSONMessage([]byte(`{"jsonrpc":"2.0","id":8,"error":{"code":-32022,"message":"unsupported","data":{"supported":["2026-07-28"],"requested":"2099-01-01"}}}`), validation))
+	inner := &fixedResponseTransport{response: &transport.JSONRPCResponse{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		ID:      mcp.NewRequestId(8),
+		Error: &mcp.JSONRPCErrorDetails{
+			Code:    mcp.UNSUPPORTED_PROTOCOL_VERSION,
+			Message: "unsupported",
+			Data:    json.RawMessage(`{"supported":["2026-07-28"],"requested":"2099-01-01"}`),
+		},
+	}}
+	validating := newResponseValidatingTransport(inner, validation)
+
+	response, err := validating.SendRequest(t.Context(), transport.JSONRPCRequest{
+		ID:     mcp.NewRequestId(8),
+		Method: string(mcp.MethodServerDiscover),
+	})
+
+	assert.Nil(t, response)
+	var unsupported mcp.UnsupportedProtocolVersionError
+	require.ErrorAs(t, err, &unsupported)
+	assert.Equal(t, "2099-01-01", unsupported.Version)
+	assert.Equal(t, []string{"2026-07-28"}, unsupported.Supported)
+}
+
+func TestStreamableClientRetriesModernDiscoveryAfterVersionRejection(t *testing.T) {
+	var requests atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var envelope struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&envelope))
+		assert.Equal(t, string(mcp.MethodServerDiscover), envelope.Method)
+		w.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32022,"message":"unsupported","data":{"supported":["2026-07-28"],"requested":"2026-07-28"}}}`, envelope.ID)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"supportedVersions":["2026-07-28"],"capabilities":{},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"fixture","version":"1"}}}}`, envelope.ID)
+	}))
+	t.Cleanup(provider.Close)
+
+	mcpClient, err := NewMCPClient("retry", &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeStreamable,
+		URL:           provider.URL,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mcpClient.GetClient().Start(t.Context()))
+	t.Cleanup(func() { _ = mcpClient.Close() })
+	initialize := mcp.InitializeRequest{}
+	initialize.Params.ProtocolVersion = mcp.ProtocolVersion20260728
+	initialize.Params.ClientInfo = mcp.Implementation{Name: "fixture", Version: "1"}
+	result, err := mcpClient.GetClient().Initialize(t.Context(), initialize)
+
+	require.NoError(t, err)
+	assert.Equal(t, mcp.ProtocolVersion20260728, result.ProtocolVersion)
+	assert.Equal(t, int32(2), requests.Load())
 }
 
 func TestLimitedStdioTransportRejectsOversizeBeforeDecode(t *testing.T) {
@@ -307,6 +462,104 @@ func TestLimitedStdioClientRejectsDuplicateEnvelopeBeforeDecode(t *testing.T) {
 	require.ErrorIs(t, err, ErrDuplicateJSONMember)
 }
 
+func TestStdioProviderRejectsUnsolicitedCallbackPromptly(t *testing.T) {
+	if os.Getenv("TAPPET_CALLBACK_FIXTURE") == "1" {
+		runUnsolicitedCallbackFixture()
+		return
+	}
+
+	mcpClient, err := NewMCPClient("callback", &config.MCPClientConfigV2{
+		TransportType: config.MCPClientTypeStdio,
+		Command:       os.Args[0],
+		Args:          []string{"-test.run=^TestStdioProviderRejectsUnsolicitedCallbackPromptly$"},
+		Env:           map[string]string{"TAPPET_CALLBACK_FIXTURE": "1"},
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, mcpClient.GetClient().Start(ctx))
+	t.Cleanup(func() { _ = mcpClient.Close() })
+
+	initialize := mcp.InitializeRequest{}
+	initialize.Params.ClientInfo = mcp.Implementation{Name: "tappet-test", Version: "1"}
+	_, err = mcpClient.GetClient().Initialize(ctx, initialize)
+	require.NoError(t, err)
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "callback-test"
+	result, err := mcpClient.CallTool(ctx, request)
+
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	content, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok)
+	assert.Equal(t, "callback rejected", content.Text)
+}
+
+func runUnsolicitedCallbackFixture() {
+	scanner := bufio.NewScanner(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Error  *struct {
+				Code int `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &request) != nil {
+			return
+		}
+		switch request.Method {
+		case string(mcp.MethodServerDiscover):
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": mcp.JSONRPC_VERSION,
+				"id":      request.ID,
+				"error": map[string]any{
+					"code":    mcp.METHOD_NOT_FOUND,
+					"message": "legacy provider",
+				},
+			})
+		case "initialize":
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": mcp.JSONRPC_VERSION,
+				"id":      request.ID,
+				"result": map[string]any{
+					"protocolVersion": mcp.ProtocolVersion20251125,
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "callback-fixture", "version": "1"},
+				},
+			})
+		case string(mcp.MethodToolsCall):
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": mcp.JSONRPC_VERSION,
+				"id":      "callback-1",
+				"method":  string(mcp.MethodSamplingCreateMessage),
+				"params":  map[string]any{},
+			})
+			if !scanner.Scan() {
+				return
+			}
+			var callbackResponse struct {
+				Error *struct {
+					Code int `json:"code"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &callbackResponse) != nil ||
+				callbackResponse.Error == nil || callbackResponse.Error.Code != mcp.METHOD_NOT_FOUND {
+				return
+			}
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": mcp.JSONRPC_VERSION,
+				"id":      request.ID,
+				"result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "callback rejected"}},
+				},
+			})
+			return
+		}
+	}
+}
+
 func TestAwaitLimitedStdioResponsePrefersLimitSignal(t *testing.T) {
 	for range 100 {
 		limitCh := make(chan struct{})
@@ -325,6 +578,31 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
 }
+
+type fixedResponseTransport struct {
+	mu                  sync.Mutex
+	response            *transport.JSONRPCResponse
+	notificationHandler func(mcp.JSONRPCNotification)
+}
+
+func (*fixedResponseTransport) Start(context.Context) error { return nil }
+
+func (t *fixedResponseTransport) SendRequest(context.Context, transport.JSONRPCRequest) (*transport.JSONRPCResponse, error) {
+	return t.response, nil
+}
+
+func (*fixedResponseTransport) SendNotification(context.Context, mcp.JSONRPCNotification) error {
+	return nil
+}
+
+func (t *fixedResponseTransport) SetNotificationHandler(handler func(mcp.JSONRPCNotification)) {
+	t.mu.Lock()
+	t.notificationHandler = handler
+	t.mu.Unlock()
+}
+
+func (*fixedResponseTransport) Close() error         { return nil }
+func (*fixedResponseTransport) GetSessionId() string { return "" }
 
 type trackingReadCloser struct {
 	io.Reader

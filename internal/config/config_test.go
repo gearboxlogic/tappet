@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,8 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadSendsConfiguredHTTPHeaders(t *testing.T) {
-	t.Parallel()
+func TestLoadSendsConfiguredHTTPHeadersWithoutLoggingCredentials(t *testing.T) {
+	previousLogOutput := log.Writer()
+	previousLogFlags := log.Flags()
+	previousLogPrefix := log.Prefix()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(previousLogOutput)
+		log.SetFlags(previousLogFlags)
+		log.SetPrefix(previousLogPrefix)
+	})
 
 	var authorization, trace string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,4 +43,6 @@ func TestLoadSendsConfiguredHTTPHeaders(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer test-token", authorization)
 	assert.Equal(t, "trace-123", trace)
+	assert.NotContains(t, logs.String(), "test-token")
+	assert.NotContains(t, logs.String(), "trace-123")
 }

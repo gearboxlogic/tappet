@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -25,15 +23,20 @@ type Client struct {
 	needManualStart bool
 	client          *client.Client
 	closeFailed     func(context.Context) error
+	toolMu          sync.RWMutex
+	invalidTools    map[string]error
 }
 
 const (
 	providerPingInterval = 30 * time.Second
 	providerPingTimeout  = 10 * time.Second
+	// maxProviderMessageBytes is the V1 downstream protocol-message ceiling.
+	// It applies to every provider transport before mcp-go decodes JSON.
+	maxProviderMessageBytes int64 = 16 << 20
 )
 
 func NewMCPClient(name string, conf *config.MCPClientConfigV2) (*Client, error) {
-	return newMCPClient(name, conf, 0)
+	return newMCPClient(name, conf, maxProviderMessageBytes)
 }
 
 // NewMCPClientWithResponseLimit creates a client whose transport rejects each
@@ -57,31 +60,22 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 		for key, val := range value.Env {
 			envs = append(envs, fmt.Sprintf("%s=%s", key, val))
 		}
-		if maxResponseBytes > 0 {
-			stdioTransport := newLimitedStdioTransport(value.Command, envs, value.Args, maxResponseBytes)
-			return &Client{
-				name:            name,
-				needManualStart: true,
-				client:          client.NewClient(newResponseValidatingTransport(stdioTransport, stdioTransport.validation)),
-				closeFailed:     stdioTransport.CloseFailed,
-			}, nil
-		}
-		managed := &managedCommand{}
-		stdioTransport := transport.NewStdioWithOptions(value.Command, envs, value.Args, transport.WithCommandFunc(managed.command))
+		stdioTransport := newLimitedStdioTransport(value.Command, envs, value.Args, maxResponseBytes)
+		validatingTransport := newResponseValidatingTransport(stdioTransport, stdioTransport.validation)
 		return &Client{
 			name:            name,
 			needManualStart: true,
-			client:          client.NewClient(stdioTransport),
-			closeFailed:     managed.terminate,
+			client:          client.NewClient(validatingTransport),
+			closeFailed: func(ctx context.Context) error {
+				validatingTransport.events.stop()
+				return stdioTransport.CloseFailed(ctx)
+			},
 		}, nil
 
 	case *config.SSEMCPClientConfig:
 		var options []transport.ClientOption
-		var validation *responseValidation
-		if maxResponseBytes > 0 {
-			validation = newResponseValidation()
-			options = append(options, client.WithHTTPClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, 0, maxResponseBytes, validation)))
-		}
+		validation := newResponseValidation()
+		options = append(options, client.WithHTTPClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, 0, maxResponseBytes, validation)))
 		if len(value.Headers) > 0 {
 			options = append(options, client.WithHeaders(value.Headers))
 		}
@@ -89,12 +83,7 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 		if err != nil {
 			return nil, fmt.Errorf("failed to create SSE transport: %w", err)
 		}
-		var mcpClient *client.Client
-		if validation != nil {
-			mcpClient = client.NewClient(newResponseValidatingTransport(sseTransport, validation))
-		} else {
-			mcpClient = client.NewClient(sseTransport)
-		}
+		mcpClient := client.NewClient(newResponseValidatingTransport(sseTransport, validation))
 		return &Client{
 			name:            name,
 			needPing:        true,
@@ -105,27 +94,16 @@ func newMCPClient(name string, conf *config.MCPClientConfigV2, maxResponseBytes 
 
 	case *config.StreamableMCPClientConfig:
 		var options []transport.StreamableHTTPCOption
-		var validation *responseValidation
-		if maxResponseBytes > 0 {
-			validation = newResponseValidation()
-			options = append(options, transport.WithHTTPBasicClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, value.Timeout, maxResponseBytes, validation)))
-		}
+		validation := newResponseValidation()
+		options = append(options, transport.WithHTTPBasicClient(newResponseLimitedHTTPClientWithValidation(http.DefaultTransport, value.Timeout, maxResponseBytes, validation)))
 		if len(value.Headers) > 0 {
 			options = append(options, transport.WithHTTPHeaders(value.Headers))
-		}
-		if value.Timeout > 0 && maxResponseBytes == 0 {
-			options = append(options, transport.WithHTTPTimeout(value.Timeout))
 		}
 		streamableTransport, err := transport.NewStreamableHTTP(value.URL, options...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create SSE transport: %w", err)
 		}
-		var mcpClient *client.Client
-		if validation != nil {
-			mcpClient = client.NewClient(newResponseValidatingTransport(streamableTransport, validation))
-		} else {
-			mcpClient = client.NewClient(streamableTransport)
-		}
+		mcpClient := client.NewClient(newResponseValidatingTransport(streamableTransport, validation))
 		return &Client{
 			name:            name,
 			needPing:        true,
@@ -192,7 +170,38 @@ func (c *Client) CloseFailed(ctx context.Context) error {
 
 // CallTool invokes a tool through the downstream MCP client.
 func (c *Client) CallTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	c.toolMu.RLock()
+	invalid := c.invalidTools[request.Params.Name]
+	c.toolMu.RUnlock()
+	if invalid != nil {
+		return nil, fmt.Errorf("provider tool %q has invalid x-mcp-header annotations: %w", request.Params.Name, invalid)
+	}
 	return c.client.CallTool(ctx, request)
+}
+
+// ListTools returns only provider tools whose x-mcp-header annotations are
+// safe to use. A provider must not make an invalid definition callable merely
+// by listing it beside valid tools.
+func (c *Client) ListTools(ctx context.Context, request mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+	result, err := c.client.ListTools(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	valid := result.Tools[:0]
+	invalid := make(map[string]error)
+	for i := range result.Tools {
+		tool := &result.Tools[i]
+		if err := mcp.ValidateParamHeaderAnnotations(tool); err != nil {
+			invalid[tool.Name] = err
+			continue
+		}
+		valid = append(valid, *tool)
+	}
+	result.Tools = valid
+	c.toolMu.Lock()
+	c.invalidTools = invalid
+	c.toolMu.Unlock()
+	return result, nil
 }
 
 // GetClient returns the underlying MCP client.
@@ -213,36 +222,4 @@ func (c *Client) NeedPing() bool {
 // StartPingTask pings until the provider lifecycle context is canceled.
 func (c *Client) StartPingTask(ctx context.Context) {
 	c.startPingTask(ctx)
-}
-
-type managedCommand struct {
-	mu  sync.Mutex
-	cmd *exec.Cmd
-}
-
-func (c *managedCommand) command(ctx context.Context, command string, env, args []string) (*exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Env = append(os.Environ(), env...)
-	c.mu.Lock()
-	c.cmd = cmd
-	c.mu.Unlock()
-	return cmd, nil
-}
-
-func (c *managedCommand) terminate(ctx context.Context) error {
-	c.mu.Lock()
-	cmd := c.cmd
-	c.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	killErr := cmd.Process.Kill()
-	waitErr := cmd.Wait()
-	if killErr == nil || errors.Is(killErr, os.ErrProcessDone) {
-		return nil
-	}
-	return errors.Join(killErr, waitErr)
 }
