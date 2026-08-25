@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: security.code.dependency-scan
+  name: Dependency security scan
+  version: 0.1.0
+  description: Inspect failed dependency security checks and vulnerable packages.
+  tags: [security, dependencies, vulnerabilities]
+spec:
+  parent: security.code
+  operations:
+    - id: scan-dependencies
+      description: Scan dependencies for known vulnerabilities.
+      provider: scanner
+      target: scan_dependencies
+  providers:
+    - id: scanner
+      type: mcp
+      serverRef: scanner

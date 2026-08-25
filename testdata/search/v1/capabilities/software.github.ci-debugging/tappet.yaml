@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: software.github.ci-debugging
+  name: GitHub CI debugging
+  version: 0.1.0
+  description: Diagnose failed GitHub Actions checks and build workflows.
+  tags: [github, ci, actions]
+spec:
+  parent: software.github
+  operations:
+    - id: inspect-failed-checks
+      description: Inspect failed checks and workflow logs.
+      provider: github
+      target: inspect_checks
+  providers:
+    - id: github
+      type: mcp
+      serverRef: github

@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: international.cafe.diagnostics
+  name: Café diagnostics
+  version: 0.1.0
+  description: Diagnose café service health and Unicode labels.
+  tags: [café, unicode, health]
+spec:
+  parent: international.cafe
+  operations:
+    - id: inspect-cafe
+      description: Inspect café labels and service health.
+      provider: cafe
+      target: inspect_cafe
+  providers:
+    - id: cafe
+      type: mcp
+      serverRef: cafe

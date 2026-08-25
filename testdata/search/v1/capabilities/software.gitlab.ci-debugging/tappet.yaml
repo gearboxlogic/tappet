@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: software.gitlab.ci-debugging
+  name: GitLab CI debugging
+  version: 0.1.0
+  description: Diagnose failed GitLab pipelines and job logs.
+  tags: [gitlab, ci, pipelines]
+spec:
+  parent: software.gitlab
+  operations:
+    - id: inspect-failed-jobs
+      description: Inspect failed pipeline jobs and logs.
+      provider: gitlab
+      target: inspect_jobs
+  providers:
+    - id: gitlab
+      type: mcp
+      serverRef: gitlab

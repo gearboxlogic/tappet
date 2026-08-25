@@ -1,0 +1,28 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: fixture.hierarchy-only-canary-topaz.excluded-fields
+  name: Excluded field control
+  version: 9.9.9-version-only-canary-ruby
+  description: Control package for deferred search data.
+  tags: [fixture-tag-evidence]
+spec:
+  parent: fixture.hierarchy-only-canary-topaz
+  skills:
+    - path: skills/search-control-skill
+      resources:
+        - id: resource-id-only-canary-jade
+          kind: reference
+          path: references/resource-path-only-canary-pearl.md
+  context:
+    - id: context-id-only-canary-indigo
+      path: context/context-path-only-canary-opal.md
+  operations:
+    - id: allowed-operation
+      description: Locate operation-only evidence.
+      provider: provider-id-only-canary-onyx
+      target: provider-target-only-canary-saffron
+  providers:
+    - id: provider-id-only-canary-onyx
+      type: mcp
+      serverRef: server-reference-only-canary-cobalt

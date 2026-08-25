@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: data.mysql.query-analysis
+  name: MySQL query analysis
+  version: 0.1.0
+  description: Diagnose slow MySQL SQL query plans and performance.
+  tags: [mysql, sql, database]
+spec:
+  parent: data.mysql
+  operations:
+    - id: analyze-query
+      description: Analyze query plans, indexes, and latency.
+      provider: mysql
+      target: analyze_query
+  providers:
+    - id: mysql
+      type: mcp
+      serverRef: mysql

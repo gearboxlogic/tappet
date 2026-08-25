@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: software.build.failure-analysis
+  name: Build failure analysis
+  version: 0.1.0
+  description: Analyze compiler errors and local build failures.
+  tags: [build, compiler]
+spec:
+  parent: software.build
+  operations:
+    - id: inspect-build-log
+      description: Inspect compiler output and build logs.
+      provider: build
+      target: inspect_build_log
+  providers:
+    - id: build
+      type: mcp
+      serverRef: build

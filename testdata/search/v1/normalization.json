@@ -1,0 +1,14 @@
+{
+  "valid": [
+    {"input":"  GitHub Actions  ","exact":"github actions","tokens":["github","actions"]},
+    {"input":"GitHubActions","exact":"githubactions","tokens":["github","actions"]},
+    {"input":"getHTTPStatus","exact":"gethttpstatus","tokens":["get","http","status"]},
+    {"input":"long-running_operation/path.value","exact":"long-running_operation/path.value","tokens":["long","running","operation","path","value"]},
+    {"input":"CAFÉ","exact":"café","tokens":["café"]},
+    {"input":"CAFÉ","exact":"café","tokens":["café"]},
+    {"input":"software.github.ci-debugging/inspect-failed-checks","exact":"software.github.ci-debugging/inspect-failed-checks","tokens":["software","github","ci","debugging","inspect","failed","checks"]},
+    {"input":"software.github.ci-debugging.inspect-failed-checks","exact":"software.github.ci-debugging.inspect-failed-checks","tokens":["software","github","ci","debugging","inspect","failed","checks"]},
+    {"input":"...///___","exact":"...///___","tokens":[]}
+  ],
+  "invalid_utf8_hex_fixture":"invalid-utf8.hex"
+}

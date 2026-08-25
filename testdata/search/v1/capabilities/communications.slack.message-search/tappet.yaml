@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: communications.slack.message-search
+  name: Slack message search
+  version: 0.1.0
+  description: Find Slack messages by conversation, channel, or sender.
+  tags: [slack, messages, communications]
+spec:
+  parent: communications.slack
+  operations:
+    - id: search-messages
+      description: Search messages and conversations.
+      provider: slack
+      target: search_messages
+  providers:
+    - id: slack
+      type: mcp
+      serverRef: slack

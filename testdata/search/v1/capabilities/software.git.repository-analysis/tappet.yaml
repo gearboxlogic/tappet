@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: software.git.repository-analysis
+  name: Git repository analysis
+  version: 0.1.0
+  description: Inspect repository history, branches, and commits.
+  tags: [git, repository, history]
+spec:
+  parent: software.git
+  operations:
+    - id: inspect-history
+      description: Inspect commit and branch history.
+      provider: git
+      target: inspect_history
+  providers:
+    - id: git
+      type: mcp
+      serverRef: git

@@ -1,0 +1,17 @@
+{"id":"acc-github-ci","kind":"unambiguous","query":"GitHub workflow checks are red; find what broke","required_id":"software.github.ci-debugging","limit":5}
+{"id":"acc-gitlab-ci","kind":"unambiguous","query":"Which GitLab pipeline job went wrong?","required_id":"software.gitlab.ci-debugging","limit":5}
+{"id":"acc-build","kind":"unambiguous","query":"Inspect compiler output from this broken local build","required_id":"software.build.failure-analysis","limit":5}
+{"id":"acc-git","kind":"unambiguous","query":"Which commit changed this Git branch?","required_id":"software.git.repository-analysis","limit":5}
+{"id":"acc-service","kind":"unambiguous","query":"Which service incident do these production metrics point to?","required_id":"observability.services.incident-diagnosis","limit":5}
+{"id":"acc-postgres","kind":"unambiguous","query":"What does this PostgreSQL plan say about latency?","required_id":"data.postgres.query-analysis","limit":5}
+{"id":"acc-mysql","kind":"unambiguous","query":"Check MySQL indexes for this slow SQL request","required_id":"data.mysql.query-analysis","limit":5}
+{"id":"acc-iam","kind":"unambiguous","query":"Which IAM roles grant more permission than intended?","required_id":"security.cloud.iam-audit","limit":5}
+{"id":"acc-dependencies","kind":"unambiguous","query":"Are any packages affected by known vulnerabilities?","required_id":"security.code.dependency-scan","limit":5}
+{"id":"acc-docs","kind":"unambiguous","query":"Find the reference example for this API call","required_id":"docs.api.reference-search","limit":5}
+{"id":"acc-slack","kind":"unambiguous","query":"Which Slack channel contains this sender's message?","required_id":"communications.slack.message-search","limit":5}
+{"id":"acc-aws-cost","kind":"unambiguous","query":"Break down the AWS billing report by cost","required_id":"cloud.aws.cost-analysis","limit":5}
+{"id":"acc-gcp-cost","kind":"unambiguous","query":"Which GCP project accounts for these costs?","required_id":"cloud.gcp.cost-analysis","limit":5}
+{"id":"acc-cafe-unicode","kind":"unambiguous","query":"Check service labels for the café health issue","required_id":"international.cafe.diagnostics","limit":5}
+{"id":"acc-query-ambiguous","kind":"ambiguous","query":"Help with SQL query plans and latency","accepted_ids":["data.mysql.query-analysis","data.postgres.query-analysis"],"limit":5}
+{"id":"acc-cost-ambiguous","kind":"ambiguous","query":"Show cloud billing reports","accepted_ids":["cloud.aws.cost-analysis","cloud.gcp.cost-analysis"],"limit":5}
+{"id":"acc-checks-cross-domain","kind":"ambiguous","query":"These failed checks need inspection","accepted_ids":["security.code.dependency-scan","software.github.ci-debugging"],"limit":5}

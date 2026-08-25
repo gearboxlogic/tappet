@@ -1,0 +1,2 @@
+{"id":"diag-semantic-near-miss","kind":"diagnostic","query":"review production access failures","notes":"Shares broad indexed words across incident and IAM capabilities; no empty-result assertion."}
+{"id":"diag-synonym-only","kind":"diagnostic","query":"why is the deployment red","notes":"Records the lexical-v1 lack of synonym expansion."}

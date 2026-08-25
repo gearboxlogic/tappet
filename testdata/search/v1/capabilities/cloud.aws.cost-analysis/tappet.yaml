@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: cloud.aws.cost-analysis
+  name: AWS cost analysis
+  version: 0.1.0
+  description: Analyze AWS cloud spending, service costs, and billing reports.
+  tags: [aws, cloud, costs]
+spec:
+  parent: cloud.aws
+  operations:
+    - id: analyze-costs
+      description: Analyze service costs and spending reports.
+      provider: aws
+      target: analyze_costs
+  providers:
+    - id: aws
+      type: mcp
+      serverRef: aws

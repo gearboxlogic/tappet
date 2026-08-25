@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: cloud.gcp.cost-analysis
+  name: GCP cost analysis
+  version: 0.1.0
+  description: Analyze GCP cloud spending, project costs, and billing reports.
+  tags: [gcp, cloud, costs]
+spec:
+  parent: cloud.gcp
+  operations:
+    - id: analyze-costs
+      description: Analyze project costs and spending reports.
+      provider: gcp
+      target: analyze_costs
+  providers:
+    - id: gcp
+      type: mcp
+      serverRef: gcp

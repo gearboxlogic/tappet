@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: security.cloud.iam-audit
+  name: Cloud IAM audit
+  version: 0.1.0
+  description: Audit cloud identity permissions and excessive access.
+  tags: [security, iam, permissions]
+spec:
+  parent: security.cloud
+  operations:
+    - id: audit-permissions
+      description: Review identities, roles, and permission grants.
+      provider: iam
+      target: audit_permissions
+  providers:
+    - id: iam
+      type: mcp
+      serverRef: iam

@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: fixture.tie.delta
+  name: Shared fixture
+  version: 0.1.0
+  description: Common equality marker.
+  tags: [fixture]
+spec:
+  parent: fixture.tie
+  operations:
+    - id: probe
+      description: Common equality marker.
+      provider: fixture
+      target: probe_delta
+  providers:
+    - id: fixture
+      type: mcp
+      serverRef: fixture

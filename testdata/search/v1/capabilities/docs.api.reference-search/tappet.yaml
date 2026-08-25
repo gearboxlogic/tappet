@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: docs.api.reference-search
+  name: API reference search
+  version: 0.1.0
+  description: Search API documentation for endpoint behavior and examples.
+  tags: [api, documentation, reference]
+spec:
+  parent: docs.api
+  operations:
+    - id: search-reference
+      description: Find API endpoints and reference documentation.
+      provider: docs
+      target: search_reference
+  providers:
+    - id: docs
+      type: mcp
+      serverRef: docs

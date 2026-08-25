@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: data.postgres.query-analysis
+  name: PostgreSQL query analysis
+  version: 0.1.0
+  description: Diagnose slow PostgreSQL SQL query plans and performance.
+  tags: [postgresql, sql, database]
+spec:
+  parent: data.postgres
+  operations:
+    - id: analyze-query
+      description: Analyze query plans, indexes, and latency.
+      provider: postgres
+      target: analyze_query
+  providers:
+    - id: postgres
+      type: mcp
+      serverRef: postgres

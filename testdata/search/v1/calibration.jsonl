@@ -1,0 +1,19 @@
+{"id":"cal-github-ci","kind":"unambiguous","query":"triage actions workflow check logs","required_id":"software.github.ci-debugging","limit":5}
+{"id":"cal-gitlab-ci","kind":"unambiguous","query":"triage gitlab pipeline job output","required_id":"software.gitlab.ci-debugging","limit":5}
+{"id":"cal-build","kind":"unambiguous","query":"inspect local compiler errors","required_id":"software.build.failure-analysis","limit":5}
+{"id":"cal-git","kind":"unambiguous","query":"review repository commits and branch history","required_id":"software.git.repository-analysis","limit":5}
+{"id":"cal-service","kind":"unambiguous","query":"investigate production incidents using service metrics","required_id":"observability.services.incident-diagnosis","limit":5}
+{"id":"cal-postgres","kind":"unambiguous","query":"inspect postgresql query performance","required_id":"data.postgres.query-analysis","limit":5}
+{"id":"cal-mysql","kind":"unambiguous","query":"inspect mysql query latency and indexes","required_id":"data.mysql.query-analysis","limit":5}
+{"id":"cal-iam","kind":"unambiguous","query":"review cloud identity access grants","required_id":"security.cloud.iam-audit","limit":5}
+{"id":"cal-dependencies","kind":"unambiguous","query":"find vulnerable software dependencies","required_id":"security.code.dependency-scan","limit":5}
+{"id":"cal-docs","kind":"unambiguous","query":"look up an api endpoint example","required_id":"docs.api.reference-search","limit":5}
+{"id":"cal-slack","kind":"unambiguous","query":"find a slack conversation by sender","required_id":"communications.slack.message-search","limit":5}
+{"id":"cal-aws-cost","kind":"unambiguous","query":"review aws spending by service","required_id":"cloud.aws.cost-analysis","limit":5}
+{"id":"cal-gcp-cost","kind":"unambiguous","query":"review gcp billing by project","required_id":"cloud.gcp.cost-analysis","limit":5}
+{"id":"cal-cafe","kind":"unambiguous","query":"inspect café unicode labels","required_id":"international.cafe.diagnostics","limit":5}
+{"id":"cal-query-ambiguous","kind":"ambiguous","query":"analyze slow query latency","accepted_ids":["data.mysql.query-analysis","data.postgres.query-analysis"],"limit":5}
+{"id":"cal-cost-ambiguous","kind":"ambiguous","query":"review cloud cost reports","accepted_ids":["cloud.aws.cost-analysis","cloud.gcp.cost-analysis"],"limit":5}
+{"id":"cal-weak-valid","kind":"unambiguous","query":"postgresql latency","required_id":"data.postgres.query-analysis","limit":5}
+{"id":"cal-lexical-near-miss","kind":"negative","query":"build a wooden table","limit":5}
+{"id":"cal-zero-overlap","kind":"negative","query":"astronomy pulsar classification","limit":5}

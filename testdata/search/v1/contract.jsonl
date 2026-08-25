@@ -1,0 +1,45 @@
+{"id":"contract-path-inside","catalog":"relevance","kind":"unambiguous","query":"software.github.ci-debugging","path":"software.github","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-path-outside","catalog":"relevance","kind":"negative","query":"software.gitlab.ci-debugging","path":"software.github","limit":5}
+{"id":"contract-path-ancestor","catalog":"relevance","kind":"unambiguous","query":"software.github.ci-debugging","path":"software","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-path-segment","catalog":"relevance","kind":"negative","query":"software.github.ci-debugging","path":"software.git","limit":5}
+{"id":"contract-root-omitted","catalog":"relevance","kind":"unambiguous","query":"software.github.ci-debugging","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-root-empty","catalog":"relevance","kind":"unambiguous","query":"software.github.ci-debugging","path":"","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-root-slash","catalog":"relevance","kind":"unambiguous","query":"software.github.ci-debugging","path":"/","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-path-mysql","catalog":"relevance","kind":"unambiguous","query":"Help with SQL query plans and latency","path":"data.mysql","required_id":"data.mysql.query-analysis","limit":5}
+{"id":"contract-path-postgres","catalog":"relevance","kind":"unambiguous","query":"Help with SQL query plans and latency","path":"data.postgres","required_id":"data.postgres.query-analysis","limit":5}
+{"id":"contract-path-aws","catalog":"relevance","kind":"unambiguous","query":"Show cloud billing reports","path":"cloud.aws","required_id":"cloud.aws.cost-analysis","limit":5}
+{"id":"contract-path-gcp","catalog":"relevance","kind":"unambiguous","query":"Show cloud billing reports","path":"cloud.gcp","required_id":"cloud.gcp.cost-analysis","limit":5}
+{"id":"contract-path-security","catalog":"relevance","kind":"unambiguous","query":"These failed checks need inspection","path":"security","required_id":"security.code.dependency-scan","limit":5}
+{"id":"contract-path-software","catalog":"relevance","kind":"unambiguous","query":"These failed checks need inspection","path":"software.github","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-unknown-path","catalog":"relevance","kind":"error","query":"diagnose failures","path":"missing.branch","expected_error":"path_not_found","limit":5}
+{"id":"contract-case-capability-id","catalog":"relevance","kind":"unambiguous","query":"SOFTWARE.GITHUB.CI-DEBUGGING","required_id":"software.github.ci-debugging","expected_match_kind":"exact_capability_id","limit":5}
+{"id":"contract-case-operation-id","catalog":"relevance","kind":"unambiguous","query":"SOFTWARE.GITHUB.CI-DEBUGGING/INSPECT-FAILED-CHECKS","required_id":"software.github.ci-debugging","expected_match_kind":"exact_operation_id","limit":5}
+{"id":"contract-camel-acronym","catalog":"relevance","kind":"unambiguous","query":"GitHubActions checks","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-punctuation","catalog":"relevance","kind":"unambiguous","query":"GitHub/Actions-checks","required_id":"software.github.ci-debugging","limit":5}
+{"id":"contract-underscore-hyphen","catalog":"relevance","kind":"unambiguous","query":"compiler_output failure-analysis","required_id":"software.build.failure-analysis","limit":5}
+{"id":"contract-cafe-nfc","catalog":"relevance","kind":"unambiguous","query":"café service health","required_id":"international.cafe.diagnostics","limit":5}
+{"id":"contract-empty-query","catalog":"relevance","kind":"negative","query":"","limit":5}
+{"id":"contract-punctuation-only","catalog":"relevance","kind":"negative","query":"...///___","limit":5}
+{"id":"contract-tie-before-top-k","catalog":"contract","kind":"tie","query":"Shared fixture","expected_ids":["fixture.tie.alpha","fixture.tie.bravo","fixture.tie.charlie","fixture.tie.delta","fixture.tie.echo"],"expected_match_kind":"exact_capability_name","limit":5}
+{"id":"contract-exact-tag","catalog":"contract","kind":"unambiguous","query":"fixture-tag-evidence","required_id":"fixture.hierarchy-only-canary-topaz.excluded-fields","expected_match_kind":"exact_tag","limit":5}
+{"id":"contract-local-operation","catalog":"contract","kind":"unambiguous","query":"allowed-operation","required_id":"fixture.hierarchy-only-canary-topaz.excluded-fields","expected_match_kind":"exact_local_operation_id","limit":5}
+{"id":"contract-skill-name","catalog":"contract","kind":"unambiguous","query":"search-control-skill","required_id":"fixture.hierarchy-only-canary-topaz.excluded-fields","expected_match_kind":"exact_skill_name","limit":5}
+{"id":"contract-capability-lexical","catalog":"contract","kind":"unambiguous","query":"deferred search data","required_id":"fixture.hierarchy-only-canary-topaz.excluded-fields","expected_match_kind":"lexical_capability","limit":5}
+{"id":"contract-operation-lexical","catalog":"contract","kind":"unambiguous","query":"operation only evidence","required_id":"fixture.hierarchy-only-canary-topaz.excluded-fields","expected_match_kind":"lexical_operation","limit":5}
+{"id":"contract-skill-lexical","catalog":"contract","kind":"unambiguous","query":"indexed skill guidance","required_id":"fixture.hierarchy-only-canary-topaz.excluded-fields","expected_match_kind":"lexical_skill","limit":5}
+{"id":"contract-body-canary","catalog":"contract","kind":"negative","query":"body only canary zephyr","limit":5}
+{"id":"contract-reference-body-canary","catalog":"contract","kind":"negative","query":"reference body only canary orchid","limit":5}
+{"id":"contract-context-body-canary","catalog":"contract","kind":"negative","query":"context body only canary violet","limit":5}
+{"id":"contract-version-canary","catalog":"contract","kind":"negative","query":"version only canary ruby","limit":5}
+{"id":"contract-hierarchy-canary","catalog":"contract","kind":"negative","query":"hierarchy only canary topaz","limit":5}
+{"id":"contract-license-canary","catalog":"contract","kind":"negative","query":"license only canary copper","limit":5}
+{"id":"contract-compatibility-canary","catalog":"contract","kind":"negative","query":"compatibility only canary iron","limit":5}
+{"id":"contract-allowed-tools-canary","catalog":"contract","kind":"negative","query":"allowed tool only canary tin","limit":5}
+{"id":"contract-metadata-canary","catalog":"contract","kind":"negative","query":"metadata only canary amber","limit":5}
+{"id":"contract-resource-id-canary","catalog":"contract","kind":"negative","query":"resource id only canary jade","limit":5}
+{"id":"contract-resource-path-canary","catalog":"contract","kind":"negative","query":"resource path only canary pearl","limit":5}
+{"id":"contract-context-id-canary","catalog":"contract","kind":"negative","query":"context id only canary indigo","limit":5}
+{"id":"contract-context-path-canary","catalog":"contract","kind":"negative","query":"context path only canary opal","limit":5}
+{"id":"contract-provider-id-canary","catalog":"contract","kind":"negative","query":"provider id only canary onyx","limit":5}
+{"id":"contract-provider-target-canary","catalog":"contract","kind":"negative","query":"provider target only canary saffron","limit":5}
+{"id":"contract-server-reference-canary","catalog":"contract","kind":"negative","query":"server reference only canary cobalt","limit":5}

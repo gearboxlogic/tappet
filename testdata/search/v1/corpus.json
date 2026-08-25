@@ -1,0 +1,56 @@
+{
+  "version": "v1",
+  "ranking_version_target": "lexical-v1",
+  "normalization_version": "unicode-nfc-fold-v1",
+  "catalogs": {
+    "relevance": "capabilities",
+    "contract": "contract-capabilities"
+  },
+  "partitions": {
+    "calibration": "calibration.jsonl",
+    "acceptance": "acceptance.jsonl",
+    "contract": "contract.jsonl",
+    "diagnostic": "diagnostic.jsonl"
+  },
+  "independent_review": {
+    "status": "approved",
+    "scope": "package cards, task judgments, contract coverage, and verifier; no ranking output",
+    "rounds": [
+      {
+        "round": 1,
+        "date": "2026-08-25",
+        "result": "rejected",
+        "note": "separate relevance and contract fixtures; add normalization, path, and excluded-field coverage"
+      },
+      {
+        "round": 2,
+        "date": "2026-08-25",
+        "result": "rejected",
+        "note": "define match kinds; add exact camel-case fixture, derived counts, and randomized install-order intent"
+      },
+      {
+        "round": 3,
+        "date": "2026-08-25",
+        "result": "approved",
+        "note": "all nine decisions covered; ranking output remained unimplemented and uninspected"
+      }
+    ]
+  },
+  "counts": {
+    "catalogs": {
+      "relevance": {"capabilities": 14, "operations": 14},
+      "contract": {"capabilities": 7, "operations": 7}
+    },
+    "partitions": {
+      "calibration": 19,
+      "acceptance": 17,
+      "contract": 45,
+      "diagnostic": 2
+    }
+  },
+  "generated_coverage": {
+    "exact_capability_id_for_every_capability": true,
+    "exact_fully_qualified_operation_id_for_every_operation": true,
+    "install_orders": ["normal", "reversed", "seeded-random"]
+  }
+}

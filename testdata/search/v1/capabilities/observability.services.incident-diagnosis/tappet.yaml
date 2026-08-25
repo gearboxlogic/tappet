@@ -1,0 +1,19 @@
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+  id: observability.services.incident-diagnosis
+  name: Service incident diagnosis
+  version: 0.1.0
+  description: Diagnose production service incidents, failures, logs, and metrics.
+  tags: [observability, incidents, services]
+spec:
+  parent: observability.services
+  operations:
+    - id: inspect-service-health
+      description: Inspect service health, logs, and metrics.
+      provider: observability
+      target: inspect_service_health
+  providers:
+    - id: observability
+      type: mcp
+      serverRef: observability
