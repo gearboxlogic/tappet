@@ -90,6 +90,18 @@ func (r *Record) ReadArtifact(ref string) ([]byte, bool) {
 	return r.snapshot.Read(artifact.Path)
 }
 
+func (r *Record) acquireArtifact(ref string) (Artifact, *artifactLease, bool) {
+	artifact, ok := r.artifacts[ref]
+	if !ok || r.snapshot == nil {
+		return Artifact{}, nil, false
+	}
+	lease, ok := r.snapshot.acquireArtifact(artifact.Path, artifact.Bytes, artifact.SHA256)
+	if !ok {
+		return Artifact{}, nil, false
+	}
+	return artifact, lease, true
+}
+
 func (r *Record) release() {
 	if r.snapshot != nil {
 		r.snapshot.release()

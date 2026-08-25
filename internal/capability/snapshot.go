@@ -2,6 +2,7 @@ package capability
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -180,6 +181,14 @@ type Snapshot struct {
 	once    sync.Once
 }
 
+// artifactLease retains one immutable content object independently of the
+// package generation that originally referenced it.
+type artifactLease struct {
+	store  *SnapshotStore
+	digest [sha256.Size]byte
+	once   sync.Once
+}
+
 func (s *Snapshot) Read(name string) ([]byte, bool) {
 	digest, ok := s.digests[name]
 	if !ok {
@@ -192,6 +201,58 @@ func (s *Snapshot) Read(name string) ([]byte, bool) {
 		return nil, false
 	}
 	return append([]byte(nil), object.data...), true
+}
+
+func (s *Snapshot) acquireArtifact(name string, expectedBytes int64, expectedSHA256 string) (*artifactLease, bool) {
+	digest, ok := s.digests[name]
+	if !ok {
+		return nil, false
+	}
+	s.store.mu.Lock()
+	defer s.store.mu.Unlock()
+	object, ok := s.store.objects[digest]
+	if !ok || int64(len(object.data)) != expectedBytes || hex.EncodeToString(digest[:]) != expectedSHA256 {
+		return nil, false
+	}
+	object.refs++
+	return &artifactLease{store: s.store, digest: digest}, true
+}
+
+func (l *artifactLease) readRange(offset, maxBytes int64) ([]byte, bool) {
+	if l == nil || offset < 0 || maxBytes < 0 {
+		return nil, false
+	}
+	l.store.mu.Lock()
+	defer l.store.mu.Unlock()
+	object, ok := l.store.objects[l.digest]
+	if !ok || offset > int64(len(object.data)) {
+		return nil, false
+	}
+	end := offset + maxBytes
+	if end < offset || end > int64(len(object.data)) {
+		end = int64(len(object.data))
+	}
+	return append([]byte(nil), object.data[offset:end]...), true
+}
+
+func (l *artifactLease) release() {
+	if l == nil {
+		return
+	}
+	l.once.Do(func() {
+		l.store.mu.Lock()
+		defer l.store.mu.Unlock()
+		object := l.store.objects[l.digest]
+		if object == nil {
+			return
+		}
+		object.refs--
+		if object.refs == 0 {
+			l.store.snapshotUsed -= int64(len(object.data))
+			clear(object.data)
+			delete(l.store.objects, l.digest)
+		}
+	})
 }
 
 func (s *Snapshot) release() {

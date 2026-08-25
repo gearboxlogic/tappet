@@ -21,6 +21,7 @@ type Registry struct {
 	entries   map[string]*registryGeneration
 	nodes     map[string]hierarchyNode
 	next      uint64
+	revision  uint64
 	closed    bool
 	onReclaim func(uint64)
 }
@@ -61,6 +62,7 @@ func (r *Registry) Add(record *Record) error {
 		return err
 	}
 	r.rebuildHierarchyLocked()
+	r.revision++
 	return nil
 }
 
@@ -97,6 +99,7 @@ func (r *Registry) Reinstall(record *Record) error {
 	r.entries[id] = &registryGeneration{id: r.next, record: record, refs: 1}
 	r.retireLocked(current)
 	r.rebuildHierarchyLocked()
+	r.revision++
 	return nil
 }
 
@@ -113,6 +116,7 @@ func (r *Registry) Uninstall(capabilityID string) error {
 	delete(r.entries, capabilityID)
 	r.retireLocked(current)
 	r.rebuildHierarchyLocked()
+	r.revision++
 	return nil
 }
 
@@ -264,6 +268,10 @@ func (r *Registry) Browse(hierarchyPath string) (HierarchyView, error) {
 	if r.closed {
 		return HierarchyView{}, ErrRegistryClosed
 	}
+	return r.browseLocked(hierarchyPath)
+}
+
+func (r *Registry) browseLocked(hierarchyPath string) (HierarchyView, error) {
 	node, exists := r.nodes[hierarchyPath]
 	if !exists {
 		return HierarchyView{}, fmt.Errorf("%w: %s", ErrHierarchyPathNotFound, hierarchyPath)

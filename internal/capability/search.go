@@ -87,38 +87,47 @@ type searchMatch struct {
 // Search returns compact cards derived only from installed package metadata.
 // It does not read artifacts, resolve provider metadata, or start providers.
 func (r *Registry) Search(request SearchRequest) (SearchResponse, error) {
+	response, _, _, err := r.searchAndBrowse(request, nil)
+	return response, err
+}
+
+func (r *Registry) searchAndBrowse(request SearchRequest, expectedRevision *uint64) (SearchResponse, HierarchyView, uint64, error) {
 	response := SearchResponse{RankingVersion: SearchRankingVersion, Results: []SearchResult{}}
 	if request.Limit <= 0 || request.Limit > SearchLimitMax {
-		return response, fmt.Errorf("%w: must be between 1 and %d", ErrSearchLimitInvalid, SearchLimitMax)
+		return response, HierarchyView{}, 0, fmt.Errorf("%w: must be between 1 and %d", ErrSearchLimitInvalid, SearchLimitMax)
 	}
 	query, err := normalizeSearchQuery(request.Query)
 	if err != nil {
-		return response, err
+		return response, HierarchyView{}, 0, err
 	}
 	path := request.Path
 	if path == "/" {
 		path = ""
 	}
 	if !utf8.ValidString(path) {
-		return response, ErrSearchPathInvalid
+		return response, HierarchyView{}, 0, ErrSearchPathInvalid
 	}
 	if len(path) > MaxHierarchyPathBytes {
-		return response, ErrSearchPathLimit
+		return response, HierarchyView{}, 0, ErrSearchPathLimit
 	}
 	if path != "" && !capabilityIDPattern.MatchString(path) {
-		return response, ErrSearchPathInvalid
+		return response, HierarchyView{}, 0, ErrSearchPathInvalid
 	}
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.closed {
-		return response, ErrRegistryClosed
+		return response, HierarchyView{}, 0, ErrRegistryClosed
 	}
-	if _, exists := r.nodes[path]; !exists {
-		return response, fmt.Errorf("%w: %s", ErrHierarchyPathNotFound, path)
+	if expectedRevision != nil && *expectedRevision != r.revision {
+		return response, HierarchyView{}, r.revision, ErrCatalogCursorStale
+	}
+	view, err := r.browseLocked(path)
+	if err != nil {
+		return response, HierarchyView{}, 0, err
 	}
 	if query.exact == "" || len(query.tokens) == 0 {
-		return response, nil
+		return response, view, r.revision, nil
 	}
 	query.qualifiedIdentifier = r.hasExactSearchIdentifierLocked(query.exact)
 
@@ -158,7 +167,7 @@ func (r *Registry) Search(request SearchRequest) (SearchResponse, error) {
 	for index := range results {
 		response.Results[index] = results[index].SearchResult
 	}
-	return response, nil
+	return response, view, r.revision, nil
 }
 
 func (r *Registry) hasExactSearchIdentifierLocked(query string) bool {
