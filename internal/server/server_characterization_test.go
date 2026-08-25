@@ -13,6 +13,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/gearboxlogic/tappet/internal/capability"
+	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/gearboxlogic/tappet/internal/hierarchy"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -343,11 +345,72 @@ func TestNewTappetServerCategoryOutputIsDeterministic(t *testing.T) {
 
 func TestNewTappetServerRejectsMissingDependencies(t *testing.T) {
 	_, err := NewTappetServer(ServerDependencies{})
-	assert.EqualError(t, err, "hierarchy is required")
+	assert.EqualError(t, err, "server registry is required")
 
 	h := loadServerTestHierarchy(t)
 	_, err = NewTappetServer(ServerDependencies{Hierarchy: h})
 	assert.EqualError(t, err, "server registry is required")
+}
+
+func TestNewTappetServerBrowsesCapabilityPackagesWithoutStartingProvider(t *testing.T) {
+	capabilities := loadServerTestCapabilities(t)
+	providers := hierarchy.NewServerRegistry(nil)
+	defer providers.Close()
+	srv, err := NewTappetServer(ServerDependencies{
+		Capabilities: capabilities,
+		Registry:     providers,
+		Name:         "Tappet",
+		Version:      "test",
+	})
+	require.NoError(t, err)
+
+	handler := srv.ListTools()["get_tools_in_category"].Handler
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{"path": "everything"}
+	result, err := handler(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	content, ok := result.Content[0].(mcp.TextContent)
+	require.True(t, ok)
+	var response struct {
+		Tools map[string]struct {
+			ToolPath     string `json:"tool_path"`
+			CapabilityID string `json:"capability_id"`
+			OperationID  string `json:"operation_id"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(content.Text), &response))
+	require.Len(t, response.Tools, 10)
+	assert.Equal(t, "everything.annotatedMessage", response.Tools["annotatedMessage"].ToolPath)
+	assert.Equal(t, "everything.annotated-message", response.Tools["annotatedMessage"].CapabilityID)
+	assert.Equal(t, "annotated-message", response.Tools["annotatedMessage"].OperationID)
+
+	execute := srv.ListTools()["execute_tool"].Handler
+	executeRequest := mcp.CallToolRequest{}
+	executeRequest.Params.Arguments = map[string]interface{}{"tool_path": "everything.add", "arguments": map[string]interface{}{"a": 1, "b": 2}}
+	_, err = execute(t.Context(), executeRequest)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server config not found: everything")
+}
+
+func TestLoadServerPrefersCapabilityPackages(t *testing.T) {
+	cfg := &config.Config{
+		McpProxy: &config.MCPProxyConfigV2{
+			Name:           "Tappet",
+			Version:        "test",
+			Type:           config.MCPServerTypeStdio,
+			CapabilityPath: filepath.Join("..", "..", "testdata", "capabilities"),
+			HierarchyPath:  filepath.Join(t.TempDir(), "missing-hierarchy"),
+			Options:        &config.OptionsV2{},
+		},
+		McpServers: map[string]*config.MCPClientConfigV2{},
+	}
+
+	srv, runtime, err := loadServer(cfg)
+	require.NoError(t, err)
+	defer runtime.Close()
+	assert.NotNil(t, runtime.capabilities)
+	assert.Len(t, srv.ListTools(), 2)
 }
 
 func loadServerTestHierarchy(t *testing.T) *hierarchy.Hierarchy {
@@ -357,6 +420,20 @@ func loadServerTestHierarchy(t *testing.T) *hierarchy.Hierarchy {
 	h, err := hierarchy.LoadHierarchy(dir)
 	require.NoError(t, err)
 	return h
+}
+
+func loadServerTestCapabilities(t *testing.T) *capability.Registry {
+	t.Helper()
+	store, err := capability.NewSnapshotStore(capability.DefaultStoreLimits())
+	require.NoError(t, err)
+	loader, err := capability.NewLoader(filepath.Join("..", "..", "testdata", "capabilities"), store)
+	require.NoError(t, err)
+	records, err := loader.LoadAll()
+	require.NoError(t, err)
+	registry, err := capability.NewRegistry(records...)
+	require.NoError(t, err)
+	t.Cleanup(registry.Close)
+	return registry
 }
 
 func newCharacterizationServer(t *testing.T) *mcpserver.MCPServer {

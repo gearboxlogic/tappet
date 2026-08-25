@@ -5,7 +5,7 @@
     "name": "Tappet",
     "version": "0.1.0",
     "type": "streamable-http",
-    "hierarchyPath": "/config/hierarchy"
+    "capabilityPath": "/config/capabilities"
   },
   "mcpServers": {
     "everything": {

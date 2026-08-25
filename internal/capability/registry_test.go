@@ -204,6 +204,28 @@ func TestResolveToolPathPreservesSingleLeafAndCapabilityOperationForms(t *testin
 	operation.Release()
 }
 
+func TestReviewedPackagesResolveLegacyCamelCasePaths(t *testing.T) {
+	store := newTestSnapshotStore(t)
+	loader, err := NewLoader(filepath.Join("..", "..", "testdata", "capabilities"), store)
+	require.NoError(t, err)
+	records, err := loader.LoadAll()
+	require.NoError(t, err)
+	registry, err := NewRegistry(records...)
+	require.NoError(t, err)
+	defer registry.Close()
+
+	for toolPath, target := range map[string]string{
+		"everything.annotatedMessage":                    "annotatedMessage",
+		"everything.structuredContent":                   "structuredContent",
+		"everything.structuredContent.structuredContent": "structuredContent",
+	} {
+		lease, err := registry.ResolveToolPath(toolPath)
+		require.NoError(t, err)
+		assert.Equal(t, target, lease.Operation().Target)
+		lease.Release()
+	}
+}
+
 func writeSimplePackage(t *testing.T, root, id, parent, target, serverRef string) string {
 	t.Helper()
 	return writeSimplePackageWithOperation(t, root, id, parent, "inspect", target, serverRef)

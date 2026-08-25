@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gearboxlogic/tappet/internal/capability"
 	"github.com/gearboxlogic/tappet/internal/config"
 	"github.com/gearboxlogic/tappet/internal/hierarchy"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -77,20 +78,26 @@ func recoverMiddleware(prefix string) MiddlewareFunc {
 
 // ServerDependencies are the runtime objects shared by every Tappet transport.
 type ServerDependencies struct {
-	Hierarchy  *hierarchy.Hierarchy
-	Registry   *hierarchy.ServerRegistry
-	Name       string
-	Version    string
-	LogEnabled bool
+	Hierarchy    *hierarchy.Hierarchy
+	Capabilities *capability.Registry
+	Registry     *hierarchy.ServerRegistry
+	Name         string
+	Version      string
+	LogEnabled   bool
 }
 
 // NewTappetServer constructs the transport-independent outward MCP server.
 func NewTappetServer(deps ServerDependencies) (*server.MCPServer, error) {
-	if deps.Hierarchy == nil {
-		return nil, errors.New("hierarchy is required")
-	}
 	if deps.Registry == nil {
 		return nil, errors.New("server registry is required")
+	}
+	var backend brokerBackend
+	if deps.Capabilities != nil {
+		backend = capabilityBackend{capabilities: deps.Capabilities, providers: deps.Registry}
+	} else if deps.Hierarchy != nil {
+		backend = hierarchyBackend{hierarchy: deps.Hierarchy, providers: deps.Registry}
+	} else {
+		return nil, errors.New("capability registry or hierarchy is required")
 	}
 
 	serverOpts := []server.ServerOption{
@@ -103,8 +110,8 @@ func NewTappetServer(deps ServerDependencies) (*server.MCPServer, error) {
 
 	mcpServer := server.NewMCPServer(deps.Name, deps.Version, serverOpts...)
 	description := "You have MCP tools hidden within categories. You MUST use get_tools_in_category to learn more about what available tools you have within these categories. Returns children categories, and tools at the specified path. Call initially with an empty string to get root categories."
-	if rootNode := deps.Hierarchy.GetRootNode(); rootNode != nil && rootNode.Overview != "" {
-		description += fmt.Sprintf("\n\n%s", rootNode.Overview)
+	if overview := backend.RootOverview(); overview != "" {
+		description += fmt.Sprintf("\n\n%s", overview)
 	}
 
 	getToolsInCategoryTool := mcp.Tool{
@@ -129,7 +136,7 @@ func NewTappetServer(deps ServerDependencies) (*server.MCPServer, error) {
 			}
 		}
 
-		response, err := deps.Hierarchy.HandleGetToolsInCategory(path)
+		response, err := backend.Browse(path)
 		if err != nil {
 			return nil, err
 		}
@@ -173,41 +180,83 @@ func NewTappetServer(deps ServerDependencies) (*server.MCPServer, error) {
 		if toolPath == "" {
 			return nil, errors.New("tool_path is required")
 		}
-		return deps.Hierarchy.HandleExecuteTool(ctx, deps.Registry, toolPath, arguments)
+		return backend.Execute(ctx, toolPath, arguments)
 	})
 
 	return mcpServer, nil
 }
 
-func loadServer(cfg *config.Config) (*server.MCPServer, *hierarchy.ServerRegistry, error) {
-	log.Printf("Loading hierarchy from %s", cfg.McpProxy.HierarchyPath)
-	h, err := hierarchy.LoadHierarchy(cfg.McpProxy.HierarchyPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load hierarchy: %w", err)
+type serverRuntime struct {
+	providers    *hierarchy.ServerRegistry
+	capabilities *capability.Registry
+}
+
+func (r *serverRuntime) Close() {
+	if r.providers != nil {
+		r.providers.Close()
 	}
-	registry := hierarchy.NewServerRegistry(cfg.McpServers)
-	logEnabled := cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false)
-	mcpServer, err := NewTappetServer(ServerDependencies{
-		Hierarchy:  h,
-		Registry:   registry,
+	if r.capabilities != nil {
+		r.capabilities.Close()
+	}
+}
+
+func loadServer(cfg *config.Config) (*server.MCPServer, *serverRuntime, error) {
+	providerRegistry := hierarchy.NewServerRegistry(cfg.McpServers)
+	runtime := &serverRuntime{providers: providerRegistry}
+	deps := ServerDependencies{
+		Registry:   providerRegistry,
 		Name:       cfg.McpProxy.Name,
 		Version:    cfg.McpProxy.Version,
-		LogEnabled: logEnabled,
-	})
+		LogEnabled: cfg.McpProxy.Options != nil && cfg.McpProxy.Options.LogEnabled.OrElse(false),
+	}
+	if cfg.McpProxy.CapabilityPath != "" {
+		log.Printf("Loading capability packages from %s", cfg.McpProxy.CapabilityPath)
+		store, err := capability.NewSnapshotStore(capability.DefaultStoreLimits())
+		if err != nil {
+			runtime.Close()
+			return nil, nil, fmt.Errorf("create capability snapshot store: %w", err)
+		}
+		loader, err := capability.NewLoader(cfg.McpProxy.CapabilityPath, store)
+		if err != nil {
+			runtime.Close()
+			return nil, nil, fmt.Errorf("create capability loader: %w", err)
+		}
+		records, err := loader.LoadAll()
+		if err != nil {
+			runtime.Close()
+			return nil, nil, fmt.Errorf("load capability packages: %w", err)
+		}
+		capabilityRegistry, err := capability.NewRegistry(records...)
+		if err != nil {
+			runtime.Close()
+			return nil, nil, fmt.Errorf("create capability registry: %w", err)
+		}
+		runtime.capabilities = capabilityRegistry
+		deps.Capabilities = capabilityRegistry
+	} else {
+		log.Printf("Loading compatibility hierarchy from %s", cfg.McpProxy.HierarchyPath)
+		h, err := hierarchy.LoadHierarchy(cfg.McpProxy.HierarchyPath)
+		if err != nil {
+			runtime.Close()
+			return nil, nil, fmt.Errorf("failed to load hierarchy: %w", err)
+		}
+		deps.Hierarchy = h
+	}
+	mcpServer, err := NewTappetServer(deps)
 	if err != nil {
-		registry.Close()
+		runtime.Close()
 		return nil, nil, err
 	}
-	return mcpServer, registry, nil
+	return mcpServer, runtime, nil
 }
 
 // StartStdioServer starts the stdio server with the given configuration
 func StartStdioServer(cfg *config.Config) error {
-	mcpServer, registry, err := loadServer(cfg)
+	mcpServer, runtime, err := loadServer(cfg)
 	if err != nil {
 		return err
 	}
-	defer registry.Close()
+	defer runtime.Close()
 	log.Printf("Starting Tappet (stdio server)")
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -221,11 +270,11 @@ func StartHTTPServer(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mcpServer, registry, err := loadServer(cfg)
+	mcpServer, runtime, err := loadServer(cfg)
 	if err != nil {
 		return err
 	}
-	defer registry.Close()
+	defer runtime.Close()
 
 	// Set up HTTP handler (SSE or Streamable)
 	var handler http.Handler

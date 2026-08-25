@@ -410,7 +410,17 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	if serverName == "" {
 		return nil, fmt.Errorf("no MCP server configured for tool: %s", toolPath)
 	}
+	actualToolName := toolDef.MapsTo
+	if actualToolName == "" {
+		actualToolName = strings.Split(toolPath, ".")[len(strings.Split(toolPath, "."))-1]
+	}
+	return ExecuteMappedTool(ctx, registry, toolPath, serverName, actualToolName, arguments, toolDef.InputSchema)
+}
 
+// ExecuteMappedTool invokes one already-resolved provider mapping. Capability
+// packages use this thin compatibility adapter while the provider manager is
+// still the inherited ServerRegistry.
+func ExecuteMappedTool(ctx context.Context, registry *ServerRegistry, logicalPath, serverName, actualToolName string, arguments map[string]interface{}, inputSchema map[string]interface{}) (*mcp.CallToolResult, error) {
 	// Bound the complete invocation, including lazy provider startup,
 	// initialization, same-provider queuing, and the downstream call.
 	toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -422,13 +432,7 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 		return nil, fmt.Errorf("failed to get MCP client: %w", err)
 	}
 
-	// Use the mapped tool name
-	actualToolName := toolDef.MapsTo
-	if actualToolName == "" {
-		actualToolName = strings.Split(toolPath, ".")[len(strings.Split(toolPath, "."))-1]
-	}
-
-	log.Printf("Executing tool: hierarchy_path=%s, server=%s, tool=%s", toolPath, serverName, actualToolName)
+	log.Printf("Executing tool: logical_path=%s, server=%s, tool=%s", logicalPath, serverName, actualToolName)
 
 	// Serialize tool calls to the same server to prevent concurrent stdio access.
 	// Stdio is a single-channel transport that cannot handle interleaved messages.
@@ -449,11 +453,11 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	if err != nil {
 		var rpcErr *client.ProviderRPCError
 		if errors.As(err, &rpcErr) {
-			return providerRPCErrorResult(rpcErr, toolDef.InputSchema), nil
+			return providerRPCErrorResult(rpcErr, inputSchema), nil
 		}
 		// Include inputSchema in error message to help LLMs self-correct parameter mistakes
-		if toolDef.InputSchema != nil {
-			schemaJSON, marshalErr := json.MarshalIndent(toolDef.InputSchema, "", "  ")
+		if inputSchema != nil {
+			schemaJSON, marshalErr := json.MarshalIndent(inputSchema, "", "  ")
 			if marshalErr == nil {
 				return nil, fmt.Errorf("failed to call tool %s: %w\n\nExpected inputSchema:\n%s", actualToolName, err, string(schemaJSON))
 			}
@@ -462,8 +466,8 @@ func (h *Hierarchy) HandleExecuteTool(ctx context.Context, registry *ServerRegis
 	}
 
 	// Check if result has IsError set - append schema to help LLMs self-correct
-	if result != nil && result.IsError && toolDef.InputSchema != nil && len(result.Content) > 0 {
-		schemaJSON, marshalErr := json.MarshalIndent(toolDef.InputSchema, "", "  ")
+	if result != nil && result.IsError && inputSchema != nil && len(result.Content) > 0 {
+		schemaJSON, marshalErr := json.MarshalIndent(inputSchema, "", "  ")
 		if marshalErr == nil {
 			// Append schema to the first text content item
 			// Note: TextContent is a value type, so we modify the copy and assign it back to the slice

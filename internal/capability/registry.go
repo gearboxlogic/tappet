@@ -180,6 +180,32 @@ func (r *Registry) ResolveOperation(capabilityID, operationID string) (*Invocati
 // operations resolve as <capability-id>.<operation-id>.
 func (r *Registry) ResolveToolPath(toolPath string) (*InvocationLease, error) {
 	r.mu.RLock()
+	type legacyMatch struct {
+		capabilityID string
+		operationID  string
+	}
+	var legacyMatches []legacyMatch
+	for capabilityID, generation := range r.entries {
+		if generation.retired || len(generation.record.operations) != 1 {
+			continue
+		}
+		operation := generation.record.operations[0]
+		legacyPath := operation.Target
+		if generation.record.parent != "" {
+			legacyPath = generation.record.parent + "." + operation.Target
+		}
+		if toolPath == legacyPath || toolPath == legacyPath+"."+operation.Target {
+			legacyMatches = append(legacyMatches, legacyMatch{capabilityID: capabilityID, operationID: operation.ID})
+		}
+	}
+	if len(legacyMatches) == 1 {
+		r.mu.RUnlock()
+		return r.ResolveOperation(legacyMatches[0].capabilityID, legacyMatches[0].operationID)
+	}
+	if len(legacyMatches) > 1 {
+		r.mu.RUnlock()
+		return nil, fmt.Errorf("%w: ambiguous legacy tool path %s", ErrOperationNotFound, toolPath)
+	}
 	if generation := r.entries[toolPath]; generation != nil && !generation.retired && len(generation.record.operations) == 1 {
 		operation := generation.record.operations[0]
 		lastSegment := toolPath

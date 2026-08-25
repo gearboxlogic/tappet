@@ -20,7 +20,7 @@ trap cleanup EXIT
 container_id=$("$container_engine" run --detach \
   --publish 127.0.0.1::9090 \
   --volume "$repo_root/config.docker.json:/config/config.json:ro,Z" \
-  --volume "$repo_root/testdata/mcp_hierarchy:/config/hierarchy:ro,Z" \
+  --volume "$repo_root/testdata/capabilities:/config/capabilities:ro,Z" \
   "$image")
 
 host_port=$("$container_engine" port "$container_id" 9090/tcp | awk -F: 'NR == 1 { print $NF }')
