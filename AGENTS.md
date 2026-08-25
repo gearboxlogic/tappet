@@ -43,8 +43,10 @@ Verified current behavior:
 - closed capability manifests, listed Agent Skills, local references, immutable
   process-local snapshots, exact lookup, deterministic hierarchy browsing, and
   registry generation leases are implemented
-- catalog search, progressive artifact reads, metadata caching, idle provider
-  shutdown, and harness adapters do not yet exist
+- bounded internal `lexical-v1` catalog search, path filtering, compact cards,
+  and a frozen adversarially reviewed retrieval corpus are implemented
+- public MCP search exposure, progressive artifact reads, metadata caching,
+  idle provider shutdown, and harness adapters do not yet exist
 
 Do not describe planned behavior as implemented behavior.
 

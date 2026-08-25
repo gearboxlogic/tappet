@@ -9,9 +9,12 @@ The current implementation keeps downstream providers open until Tappet shuts do
 
 Tappet now loads closed V1-alpha capability manifests, validates listed Agent
 Skills and references from private staged bytes, and publishes immutable
-in-memory registry generations. Search, progressive artifact reads, metadata
-caching, idle provider shutdown, and the planned four-tool broker API are later
-milestones.
+in-memory registry generations. Its registry now provides bounded,
+deterministic `lexical-v1` catalog search without reading artifacts or starting
+providers. The public MCP surface still exposes only hierarchy browsing and
+execution; public search exposure, progressive artifact reads, metadata
+caching, idle provider shutdown, and the planned four-tool broker API remain
+later work.
 See [the architecture](docs/ARCHITECTURE.md), [package format](docs/CAPABILITY_PACKAGE.md),
 [MCP conformance matrix](docs/MCP_CONFORMANCE.md), and [roadmap](docs/ROADMAP.md)
 for accepted boundaries, verified protocol behavior, and planned work.

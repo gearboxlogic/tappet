@@ -266,7 +266,7 @@ func (r *Registry) Browse(hierarchyPath string) (HierarchyView, error) {
 	}
 	node, exists := r.nodes[hierarchyPath]
 	if !exists {
-		return HierarchyView{}, fmt.Errorf("hierarchy path not found: %s", hierarchyPath)
+		return HierarchyView{}, fmt.Errorf("%w: %s", ErrHierarchyPathNotFound, hierarchyPath)
 	}
 	view := HierarchyView{Path: hierarchyPath, CapabilityID: node.capabilityID}
 	for _, childPath := range node.children {

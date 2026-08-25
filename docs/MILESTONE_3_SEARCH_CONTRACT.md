@@ -1,7 +1,6 @@
 # Milestone 3 search contract
 
-Status: **accepted search and benchmark contract as of 2026-08-25; the
-`lexical-v1` score contract remains provisional until calibration**
+Status: **accepted for `lexical-v1` as of 2026-08-25**
 
 This document fixes the catalog-search and benchmark decisions that must remain
 stable while Milestone 3 search is implemented. Search keeps irrelevant package
@@ -20,11 +19,18 @@ A local operation ID can match more than one capability and is therefore a
 strong local-field match, not a global identifier. Provider targets never
 participate in search.
 
+A query whose normalized full text matches an installed capability ID or fully
+qualified operation ID anywhere in the catalog is exact-only. It cannot fall
+back to lexical matching when that identifier is outside the selected path.
+
 An optional hierarchy path filters the candidate set before matching and
 ranking. An omitted path, an empty path, and `/` select the complete catalog. A
 specific path selects that dot-delimited node and its descendants. Exact IDs
 outside the selected subtree remain excluded. An unknown path returns
 `path_not_found`; path filtering never grants or denies execution authority.
+Non-root paths must be valid UTF-8, use lowercase dot-delimited identifier
+syntax, and contain at most 256 UTF-8 bytes. Invalid syntax and exceeded size
+return distinct typed errors before registry lookup.
 
 ## Searchable fields
 
@@ -66,6 +72,11 @@ Search rejects invalid UTF-8 and applies this versioned pipeline:
 6. Repeated-boundary collapse while preserving letters, numbers, and
    diacritics inside tokens.
 
+Before general case-boundary splitting, the established product spellings
+`GitHub` and `GitLab` each remain one lexical token. Thus `GitHubActions`
+becomes `github`, `actions`, while `getHTTPStatus` becomes `get`, `http`,
+`status`.
+
 Exact identifiers preserve their separators. Exact names and tags compare
 normalized full text; punctuation splitting applies only to lexical matching.
 The normalized query may not exceed 4,096 UTF-8 bytes and is never truncated.
@@ -101,7 +112,29 @@ The response uses this closed `match_kind` enum:
 When multiple match kinds qualify in the same tier, the table order wins. For
 lexical fields within one match kind, the field with the largest individual
 field score is primary; a tie uses the listed field order. The primary field
-selection affects only the bounded explanation, not the candidate score.
+score is the candidate score. Static precedence only resolves equal field
+scores and selects the bounded explanation.
+
+`lexical-v1` scores each eligible field independently using sets of unique,
+normalized tokens. Let:
+
+- `Q` be the sum of the UTF-8 byte lengths of all unique query tokens,
+- `F` be the corresponding sum for one field, and
+- `O` be the sum for tokens present in both sets.
+
+For `O > 0`, the field score is:
+
+```text
+floor(500000 * O / Q)
++ floor(250000 * O / F)
++ min(250000, 25000 * O)
+```
+
+Each division is independent integer division rounded down. A lexical field
+qualifies at score 375,000 or greater. Search selects the first tier containing
+a qualifying field and uses the highest field score in that match kind as the
+candidate score. Zero-overlap fields score zero. These constants were selected
+only against the frozen `v1` calibration partition.
 
 The deterministic ordering key is match tier ascending, lexical score
 descending within the tier, then capability ID ascending by UTF-8 bytes. The ID
