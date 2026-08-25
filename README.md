@@ -7,11 +7,15 @@ Tappet is an MCP broker that exposes two tools:
 
 The current implementation keeps downstream providers open until Tappet shuts down. It serializes calls to the same provider and permits calls to different providers to run concurrently. The outward tool names are inherited compatibility contracts and have not changed in this baseline.
 
-Tappet does not yet implement capability packages, Agent Skills loading, search, metadata caching, idle provider shutdown, or the planned broker API. See [the architecture](docs/ARCHITECTURE.md), [package proposal](docs/CAPABILITY_PACKAGE.md), and [roadmap](docs/ROADMAP.md) for accepted boundaries and planned work.
+Tappet does not yet implement capability packages, Agent Skills loading,
+search, metadata caching, idle provider shutdown, or the planned broker API.
+See [the architecture](docs/ARCHITECTURE.md), [package proposal](docs/CAPABILITY_PACKAGE.md),
+[MCP conformance matrix](docs/MCP_CONFORMANCE.md), and [roadmap](docs/ROADMAP.md)
+for accepted boundaries, verified protocol behavior, and planned work.
 
 ## Build
 
-Go 1.24 or newer is required. CI, release artifacts, and the container image use Go 1.24.13.
+Go 1.25.5 or newer is required. CI, release artifacts, and the container image use Go 1.25.5.
 
 ```bash
 make build

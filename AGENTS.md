@@ -25,10 +25,16 @@ Verified current behavior:
 - tool hierarchy data is stored as generated JSON files
 - downstream MCP servers start lazily on first invocation
 - downstream clients remain open until Tappet exits
+- modern 2026-07-28 discovery and stateless requests are supported, with
+  legacy negotiation through 2025-11-25
+- downstream messages are bounded and validated before SDK decoding; provider
+  event admission and callback rejection are bounded
+- official 2025-11-25 and 2026-07-28 server/client conformance baselines run in CI
 - the unused provider-level `activate_<provider>` lazy-loading path has been retired; the shipped recursive hierarchy broker is the only lazy invocation path
 - the module path is `github.com/gearboxlogic/tappet` and shipped binaries use Tappet names
-- the MCP dependency is `github.com/mark3labs/mcp-go v0.43.2`
-- downstream initialization uses the legacy MCP initialize handshake
+- the MCP dependency is `github.com/mark3labs/mcp-go v1.0.0-beta.1`
+- downstream clients use modern `server/discover` and stateless per-request
+  metadata when available, with legacy initialize fallback through 2025-11-25
 - stdio and HTTP transports share one outward server constructor
 - characterization and generator tests are active; obsolete `.skip` suites were retired with recorded dispositions
 - skills, capability manifests, catalog search, idle provider shutdown, and harness adapters do not yet exist

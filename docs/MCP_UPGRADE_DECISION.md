@@ -1,31 +1,37 @@
 # MCP SDK upgrade target
 
-Status: selected compatibility-test target for Milestone 1; adoption is gated on the minimum Go toolchain decision
+Status: **adopted for Milestone 1**
 
 Decision date: 2026-08-19
 
 ## Decision
 
-Keep `github.com/mark3labs/mcp-go v0.43.2` in Milestone 0. Target `github.com/mark3labs/mcp-go v1.0.0-beta.1` in a separate Milestone 1 pull request.
+Adopt `github.com/mark3labs/mcp-go v1.0.0-beta.1` with Go 1.25.5 for
+Milestone 1. Keep narrow Tappet adapters around the SDK where protocol fidelity
+or resource bounds require behavior the beta does not provide directly.
 
 `v1.0.0-beta.1` is the first and, as of the decision date, latest tag containing commit [`42009d4`](https://github.com/mark3labs/mcp-go/commit/42009d4ed77d6b209cf895871576153129f9dff5). The tag points to `56af04b2a9aedefa7756d9eef77065e4275a7ae6`; `v0.58.0` points to the modern-support commit's parent. The [release notes](https://github.com/mark3labs/mcp-go/releases/tag/v1.0.0-beta.1) identify MCP 2026-07-28 support as the release change. Although GitHub does not mark the release as a prerelease, the SemVer tag is a beta and should be treated that way.
 
-The upgrade is not needed for characterization, rebranding, common server construction, or CI. Including it here would mix protocol behavior changes into a compatibility baseline.
+The dependency remains a beta. Its protocol behavior is therefore pinned by
+Tappet integration tests and the official conformance package rather than by
+an assumption of SDK stability.
 
 ## Minimum Go toolchain gate
 
-The selected tag's [`go.mod`](https://github.com/mark3labs/mcp-go/blob/v1.0.0-beta.1/go.mod) declares Go `1.25.5`. Tappet currently declares Go `1.24.0` as its minimum language version, while CI, release artifacts, and the Docker builder use Go `1.24.13`. Adopting this SDK tag therefore also requires an explicit minimum-toolchain change. It is not only an SDK or protocol compatibility update.
+The selected tag's [`go.mod`](https://github.com/mark3labs/mcp-go/blob/v1.0.0-beta.1/go.mod)
+declares Go `1.25.5`. Tappet now declares and uses Go 1.25.5 in `go.mod`, CI,
+release automation, the Docker builder, and contributor setup.
 
-Before accepting the beta dependency for production, Milestone 1 must decide whether to:
-
-- raise Tappet's minimum Go version to at least `1.25.5` and update `go.mod`, CI, the Docker builder, contributor documentation, and supported local environments together; or
-- evaluate another SDK target if retaining the Go 1.24 baseline is a requirement.
-
-The `mcp-go` beta remains the first experiment because it is the first tag containing the required modern-protocol commit. It should be adopted only if the coordinated toolchain change is acceptable, the beta passes the modern and legacy conformance matrix below, typed results and errors remain intact, and provider lifecycle behavior remains controllable. A newer stable `mcp-go` tag or the official Go SDK should be preferred if it meets those criteria before Milestone 1 begins.
+The coordinated toolchain change is accepted. Returning to Go 1.24 would
+require selecting a different MCP SDK target and repeating the protocol matrix.
 
 ## Current behavior
 
-Tappet calls `Initialize` explicitly in `internal/hierarchy.newProviderClient` and `structure_generator/cmd.fetchToolsFromServer`. With `mcp-go v0.43.2`, those calls use the legacy initialize handshake and protocol-session behavior. The outward server uses the same dependency for stdio, SSE, and Streamable HTTP.
+Tappet retains the SDK's public `Initialize` entry point in provider and
+inventory code, but the wire behavior is negotiated. Modern providers receive
+`server/discover` and stateless requests; legacy providers receive the
+initialize handshake. The outward server uses the same dependency for stdio,
+SSE, and Streamable HTTP.
 
 ## Negotiation in the target
 
@@ -64,10 +70,41 @@ Use the [official MCP conformance repository](https://github.com/modelcontextpro
 
 The suite changes over time. `--requirements <revision>` is the frozen release contract; `--suite` and `--spec-version` describe the current suite. Some post-release, extension, or pending checks run without affecting a revision score. `wire-schema-harness-error` identifies invalid traffic from the harness rather than the implementation, and scenarios with no instrumented traffic emit no wire-schema check.
 
+The plan is implemented with
+`@modelcontextprotocol/conformance@0.2.0-alpha.11` in
+`script/test-mcp-conformance.sh` and CI. Check-level baselines cover only
+surfaces outside the fixed broker or accepted boundaries, such as prompts,
+resources, provider OAuth, callback-driven MRTR, and optional legacy GET-stream
+resumption. A newly passing baseline entry fails the job as stale. See
+[MCP conformance](MCP_CONFORMANCE.md) for the recorded matrix.
+
 ## SDK choice
 
-Remain on `mcp-go` for the first experiment because Tappet already uses its client, server, and transport APIs throughout the codebase, and the target commit includes a modern/legacy compatibility matrix. This makes the protocol upgrade smaller than an SDK migration.
+Remain on `mcp-go` for Milestone 1. Tappet already uses its client, server, and
+transport APIs throughout the codebase, and the beta passed the applicable
+modern and legacy matrix once wrapped by narrow adapters.
 
-Evaluate the official Go SDK if the beta target fails required conformance checks, cannot preserve typed results and errors, or makes provider lifecycle control difficult. The official SDK's [`v1.7.0` release](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.7.0) implements 2026-07-28 and integrates official client and server conformance tests, but migration would touch nearly every MCP call site.
+The measured comparison used official Go SDK `v1.7.0`. It provides first-party
+2026-07-28 support and conformance integration, but migration would replace
+nearly every MCP client, server, transport, and typed-content call site. The
+comparison was made against official SDK tag `v1.7.0`, module sum
+`h1:yqjY2dsbKAC0LSuWZVBMrHgiG8ukXv6NRo0JiALay44=`. In the completed Milestone 1
+tree, the current SDK appears in 9 production Go files and 133 SDK-qualified
+references. These measurements are reproducible with:
 
-Milestone 1 should upgrade `mcp-go` in isolation, add dual-era fixtures, run conformance by protocol revision and transport, and decide whether the beta is acceptable before capability-package work begins.
+```bash
+rg -l 'github.com/mark3labs/mcp-go' --glob='*.go' --glob='!*_test.go'
+rg -o 'mcp(client|server)?\.|transport\.' --glob='*.go' --glob='!*_test.go' | wc -l
+```
+
+The official SDK supplies modern and legacy stdio, HTTP, and Streamable HTTP
+transports, so it clears the protocol-coverage gate. It does not remove
+Tappet's required boundaries: pre-decode byte and JSON budgets, event
+admission, callback policy, and lossless error capture remain broker-specific.
+Replacing 9 production files and 133 call-site references while retaining
+those adapters is not a clear correctness or maintenance benefit for this
+milestone.
+
+Revisit the official SDK when those adapters can be reduced materially, or
+when a stable SDK release removes the beta risk without weakening the tested
+boundaries.

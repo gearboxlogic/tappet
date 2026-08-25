@@ -6,6 +6,10 @@ The roadmap is ordered to prove the narrow capability problem before expanding t
 
 ## Milestone 0: Establish an honest baseline
 
+Status: **complete as of 2026-08-24**. The
+[completion audit](MILESTONE_0_AUDIT.md) maps every work item and exit
+criterion to repository evidence.
+
 Outcome: the repository can be changed safely without confusing inherited Lazy MCP behavior with planned Tappet behavior.
 
 Work:
@@ -32,6 +36,12 @@ Exit criteria:
   credential inputs remain compatible and absent from logs and generated data
 
 ## Milestone 1: Modern MCP foundation
+
+Status: **complete as of 2026-08-24**. See the
+[recorded conformance matrix](MCP_CONFORMANCE.md) and
+[SDK decision](MCP_UPGRADE_DECISION.md). The
+[completion audit](MILESTONE_1_AUDIT.md) maps every work item and exit
+criterion to executable evidence.
 
 Outcome: Tappet can serve a modern fixed broker surface and communicate with modern and legacy downstream providers.
 

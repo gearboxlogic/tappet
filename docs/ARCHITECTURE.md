@@ -1048,6 +1048,14 @@ Unsupported callbacks are rejected within the same finite handler budget. Event
 payloads, goroutines, and callback correlation state therefore remain bounded
 even when a provider floods progress, list-change, or unsolicited messages.
 
+Milestone 1 implements the transport frame limits before SDK decode, then
+admits decoded notifications to the bounded queue. It does not expose callback
+handlers, so unsolicited callbacks are rejected directly by the transport and
+never enter an application callback queue. Reserving notification capacity
+before method-specific decode and synchronously fencing
+`notifications/tools/list_changed` are provider-manager work for Milestone 4;
+they are accepted V1 design here, not current implementation.
+
 ### 6.7 Metadata cache
 
 Cache:
@@ -1301,7 +1309,13 @@ For MCP 2026-07-28, account for:
 - JSON Schema 2020-12 behavior
 - official conformance tests
 
-Current code uses `mcp-go v0.43.2`. `mark3labs/mcp-go` merged 2026-07-28 support after that version. [The upgrade decision](MCP_UPGRADE_DECISION.md) selects `v1.0.0-beta.1` for an isolated Milestone 1 compatibility and conformance pull request. Upgrade work must remain separate from the capability model so SDK migration does not drive architecture.
+Current code uses `mcp-go v1.0.0-beta.1` with Go 1.25.5. Narrow Tappet
+transport adapters enforce pre-decode frame budgets, bound decoded provider
+notifications, preserve exact JSON-RPC errors, reject callbacks, and apply the
+modern metadata corrections documented in the
+[upgrade decision](MCP_UPGRADE_DECISION.md).
+Protocol work remains separate from the capability model so a later SDK
+migration cannot drive capability architecture.
 
 Do not switch Go SDKs without a focused comparison. First test the current SDK line at a revision containing modern support.
 

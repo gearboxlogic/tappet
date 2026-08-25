@@ -48,7 +48,9 @@ Each `mcpServers` entry supports one transport:
 - `sse`: `url` and `headers`
 - `streamable-http`: `url`, `headers`, and `timeout`
 
-The current client explicitly performs the legacy MCP initialize handshake after starting a provider.
+After starting a provider, the client first attempts modern `server/discover`.
+It uses stateless 2026-07-28 requests when discovery succeeds and falls back to
+the legacy initialize handshake for providers through 2025-11-25.
 
 Environment values use `${NAME}` syntax:
 

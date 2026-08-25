@@ -318,7 +318,7 @@ Tappet implications:
 
 ### Current dependency: `mark3labs/mcp-go`
 
-Current Tappet version: `v0.43.2`.
+Current Tappet version: `v1.0.0-beta.1`.
 
 The project merged 2026-07-28 support in commit:
 
@@ -326,11 +326,11 @@ The project merged 2026-07-28 support in commit:
 
 That implementation includes modern/legacy negotiation, stateless HTTP behavior, result typing, cache hints, MRTR, headers, and compatibility tests.
 
-Recommendation, resolved for the next milestone in [the upgrade decision](MCP_UPGRADE_DECISION.md):
+Decision, implemented in [the upgrade decision](MCP_UPGRADE_DECISION.md):
 
-- first test an official tagged release containing that commit
-- avoid a full SDK migration unless compatibility or maintenance evidence justifies it
-- add conformance tests before claiming compliance
+- use the first official tag containing that commit with narrow compatibility adapters
+- retain it after a measured comparison with official Go SDK `v1.7.0`
+- pin official client and server conformance matrices in CI
 
 ### Official Go SDK
 

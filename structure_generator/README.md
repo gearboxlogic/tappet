@@ -9,7 +9,18 @@ make build
   --output testdata/mcp_hierarchy
 ```
 
-The generator gives each provider an independent 30-second inventory timeout, performs the legacy MCP initialize handshake, and follows every `tools/list` cursor. Generation fails if any configured provider cannot return a complete inventory. It rejects provider and tool names that collide under Unicode case folding or canonical normalization, so a case-insensitive or normalization-insensitive filesystem cannot silently replace one generated entry with another. It builds the hierarchy in a fresh staging directory and replaces the previous generated tree only after generation succeeds, so removed providers and tools do not remain as stale leaves. Existing non-empty output must be recognizable as a generated hierarchy; working-directory ancestors and the system temporary directory are rejected. It never reports success with a partial hierarchy. It writes:
+The generator gives each provider an independent 30-second inventory timeout,
+negotiates modern `server/discover` or the legacy initialize fallback, and
+follows every `tools/list` cursor. Generation fails if any configured provider
+cannot return a complete inventory. It rejects provider and tool names that
+collide under Unicode case folding or canonical normalization, so a
+case-insensitive or normalization-insensitive filesystem cannot silently
+replace one generated entry with another. It builds the hierarchy in a fresh
+staging directory and replaces the previous generated tree only after
+generation succeeds, so removed providers and tools do not remain as stale
+leaves. Existing non-empty output must be recognizable as a generated
+hierarchy; working-directory ancestors and the system temporary directory are
+rejected. It never reports success with a partial hierarchy. It writes:
 
 ```text
 root.json
@@ -17,7 +28,13 @@ root.json
 <provider>/<tool>.json
 ```
 
-Each tool leaf keeps its input schema, optional output schema, annotations, downstream provider name, and `maps_to` name. Live inventory reads each raw `tools/list` result before the pinned SDK converts it to typed tool structures, preserving valid schema keywords that `mcp-go v0.43.2` does not model. `--regenerate` rebuilds branch overviews after files are moved without changing leaf definitions.
+Each tool leaf keeps its input schema, optional output schema, annotations,
+downstream provider name, and `maps_to` name. Live inventory reads each raw
+`tools/list` result before the pinned SDK converts it to typed tool structures,
+preserving schema keywords and exact JSON number lexemes. Invalid
+`x-mcp-header` annotations reject the inventory instead of creating a callable
+unsafe tool. `--regenerate` rebuilds branch overviews after files are moved
+without changing leaf definitions.
 
 Package use:
 

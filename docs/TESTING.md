@@ -19,20 +19,56 @@ The active `internal/client/lazy_load_test.go` suite and its provider-level `act
 
 Routine `go test ./...` runs do not download or execute third-party MCP packages. The structure-generator config test launches the repository's test binary as a local stdio MCP fixture. The downstream SSE lifecycle test uses an in-process MCP server. These tests cover provider environment propagation and request-independent provider lifetime without external installations.
 
+## Credential compatibility and exclusion
+
+The Milestone 0 compatibility boundary accepts existing literal credentials
+without copying them into generated hierarchy data or request logs. These tests
+pin both halves of that contract:
+
+- `TestProviderCredentialsAreExcludedFromLogsAndGeneratedHierarchy` passes
+  credentials through provider arguments, environment variables, URLs, and
+  headers. It then scans captured generator logs and every generated hierarchy
+  file for each exact value.
+- `TestOutwardAuthCredentialIsExcludedFromRequestLogs` sends a valid outward
+  bearer token through the access middleware while request logging is enabled
+  and proves the token is absent from the log.
+- `TestFetchFromConfigPassesStdioEnvironment`,
+  `TestFetchFromConfigSupportsStreamableHTTPHeaders`, and
+  `TestSSEProviderReceivesConfiguredHeadersAndOutlivesTriggeringRequest` prove
+  that exclusion does not break provider credential propagation.
+- `TestLoadSendsConfiguredHTTPHeadersWithoutLoggingCredentials` proves
+  remote-configuration request headers remain compatible and absent from logs.
+
+The values remain compatibility inputs only. Tappet does not persist them in
+generated metadata or manage their lifecycle.
+
 ## Same-provider serialization
 
 Tappet retains the inherited per-provider mutex for this baseline. This is a transport compatibility rule, not a provider lifecycle design decision.
 
-At `mcp-go v0.43.2`, `client/transport/stdio.go` protects the response map but calls `stdin.Write` without a write mutex. Concurrent large JSON-RPC writes to one stdio pipe can interleave. Commit `d9288f566e64e841c641b0f0a106a3f7284dcfa0` added Tappet's inherited mutex after such concurrent calls timed out. Active tests pin the resulting policy:
+The inherited broker serializes calls to one provider while allowing different
+providers to run concurrently. This remains an explicit provider policy after
+the `mcp-go v1.0.0-beta.1` transport added its own write synchronization.
+Commit `d9288f566e64e841c641b0f0a106a3f7284dcfa0` introduced the original guard
+after concurrent stdio calls timed out. Active tests pin the resulting policy:
 
 - one provider receives one call at a time;
 - different providers can run concurrently;
 - a queued call stops waiting when its context is canceled or reaches its deadline, without invoking the provider, and the returned error preserves the context classification.
 
-Milestone 1 should recheck the serialization rule against the selected SDK version and transport implementations. Context-aware admission is retained while serialization remains necessary.
+Milestone 1 rechecked the rule against the selected SDK and retained
+context-aware admission as an explicit provider policy.
 
 ## Failed provider initialization
 
-At `mcp-go v0.43.2`, ordinary close can block while waiting for a failed stdio child. Tappet's failure-specific close path kills and reaps that child under a finite cleanup context before returning the original start or initialize error. Cleanup occurs outside the registry lock: `TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds one provider's context-aware cleanup open while another provider loads, `TestFailedProviderCleanupHonorsDeadline` covers the cleanup deadline, and `TestFailedStdioCleanupKillsAndReapsProvider` exercises the production stdio process path.
+Ordinary SDK close can block while waiting for a failed stdio child. Tappet's
+failure-specific close path kills and reaps that child under a finite cleanup
+context before returning the original start or negotiation error. Cleanup
+occurs outside the registry lock:
+`TestFailedProviderCleanupDoesNotBlockOtherProviderLoads` holds one provider's
+context-aware cleanup open while another provider loads,
+`TestFailedProviderCleanupHonorsDeadline` covers the cleanup deadline, and
+`TestFailedStdioCleanupKillsAndReapsProvider` exercises the production stdio
+process path.
 
 Provider startup is coordinated per provider rather than under the registry-wide lock. `TestSlowProviderLoadDoesNotBlockOtherProviders` proves that one cold provider does not block another, `TestConcurrentCallsShareOneProviderLoad` proves concurrent requests do not duplicate startup, `TestLiveWaiterRetriesLoadCanceledByInitiatingCaller` gives each live waiter its own acquisition budget, and `TestProviderFinishingAfterRegistryCloseIsClosed` covers the shutdown race.
