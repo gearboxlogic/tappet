@@ -19,8 +19,22 @@ func TestApplyOverrides(t *testing.T) {
 	applyOverrides(cfg, "8080", "/flag/hierarchy", "/flag/capabilities")
 
 	assert.Equal(t, ":8080", cfg.McpProxy.Addr)
-	assert.Equal(t, "/flag/hierarchy", cfg.McpProxy.HierarchyPath)
+	assert.Empty(t, cfg.McpProxy.HierarchyPath)
 	assert.Equal(t, "/flag/capabilities", cfg.McpProxy.CapabilityPath)
+}
+
+func TestHierarchyOverrideSelectsCompatibilityBackend(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{McpProxy: &config.MCPProxyConfigV2{
+		HierarchyPath:  "/configured/hierarchy",
+		CapabilityPath: "/configured/capabilities",
+	}}
+
+	applyOverrides(cfg, "", "/flag/hierarchy", "")
+
+	assert.Equal(t, "/flag/hierarchy", cfg.McpProxy.HierarchyPath)
+	assert.Empty(t, cfg.McpProxy.CapabilityPath)
 }
 
 func TestApplyOverridesKeepsConfigWhenFlagsAreUnset(t *testing.T) {

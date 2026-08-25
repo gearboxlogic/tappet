@@ -10,10 +10,22 @@ response_dir=$(mktemp -d)
 container_id=
 
 cleanup() {
-  if [[ -n "$container_id" ]]; then
-    "$container_engine" rm --force "$container_id" >/dev/null 2>&1 || true
-  fi
-  rm -rf "$response_dir"
+
+	status=$?
+	if [[ "$status" -ne 0 && -n "$container_id" ]]; then
+		"$container_engine" logs "$container_id" >&2 || true
+		for response in "$response_dir"/*.json; do
+			if [[ -f "$response" ]]; then
+				echo "smoke response: $response" >&2
+				sed -n '1,200p' "$response" >&2
+			fi
+		done
+	fi
+	if [[ -n "$container_id" ]]; then
+		"$container_engine" rm --force "$container_id" >/dev/null 2>&1 || true
+	fi
+	rm -rf "$response_dir"
+	return "$status"
 }
 trap cleanup EXIT
 
@@ -55,7 +67,14 @@ if [[ "$initialized" != "true" ]]; then
   echo "container did not accept an MCP initialize request" >&2
   exit 1
 fi
-grep -q '"name":"Tappet"' "$initialize_response"
+jq -e '.result.serverInfo.name == "Tappet"' "$initialize_response" >/dev/null
+
+curl --fail --silent --show-error --max-time 5 \
+  --output /dev/null \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+  "http://127.0.0.1:$host_port/"
 
 tools_response="$response_dir/tools.json"
 curl --fail --silent --show-error --max-time 5 \
@@ -64,5 +83,19 @@ curl --fail --silent --show-error --max-time 5 \
   --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
   "http://127.0.0.1:$host_port/" >"$tools_response"
 
-grep -q '"name":"get_tools_in_category"' "$tools_response"
-grep -q '"name":"execute_tool"' "$tools_response"
+jq -e '[.result.tools[].name] | sort == ["execute_tool", "get_tools_in_category"]' "$tools_response" >/dev/null
+
+capabilities_response="$response_dir/capabilities.json"
+curl --fail --silent --show-error --max-time 5 \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_tools_in_category","arguments":{"path":"everything"}}}' \
+  "http://127.0.0.1:$host_port/" >"$capabilities_response"
+
+jq -e '
+  .result.content[]
+  | select(.type == "text")
+  | .text
+  | fromjson
+  | .tools.add.capability_id == "everything.add"
+' "$capabilities_response" >/dev/null

@@ -14,7 +14,7 @@ go build -o build/tappet-conformance-client ./conformance/client
 ./build/tappet \
   --config testdata/recursive_config_test.json \
   --port "$port" \
-  --hierarchy testdata/mcp_hierarchy >"$server_log" 2>&1 &
+  --capabilities testdata/capabilities >"$server_log" 2>&1 &
 server_pid=$!
 
 cleanup() {

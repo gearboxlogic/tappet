@@ -90,6 +90,53 @@ func TestLoaderFailureDoesNotPublishOrRetainStagedBytes(t *testing.T) {
 	assert.Equal(t, StoreStats{}, store.Stats())
 }
 
+func TestLoadAllUnknownFieldRejectsCompletePackageSet(t *testing.T) {
+	root := t.TempDir()
+	writePackageFixture(t, root, "software.github.a-valid")
+	invalidDir := writePackageFixture(t, root, "software.github.z-invalid")
+	manifestPath := filepath.Join(invalidDir, manifestFileName)
+	manifest := strings.Replace(readFileString(t, manifestPath), "kind: Capability", "kind: Capability\ncredential: must-not-survive", 1)
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifest), 0o644))
+	store := newTestSnapshotStore(t)
+	loader, err := NewLoader(root, store)
+	require.NoError(t, err)
+
+	_, err = loader.LoadAll()
+	assertPackageError(t, err, "package_manifest_unknown_field", "manifest.credential")
+	assert.NotContains(t, fmt.Sprint(err), "must-not-survive")
+	assert.Equal(t, StoreStats{}, store.Stats(), "no package generation may survive an atomic load failure")
+}
+
+func TestRecordGettersDoNotExposeMutableState(t *testing.T) {
+	root := t.TempDir()
+	writePackageFixture(t, root, "software.github.ci-debugging")
+	store := newTestSnapshotStore(t)
+	loader, err := NewLoader(root, store)
+	require.NoError(t, err)
+	record, err := loader.Load("software.github.ci-debugging")
+	require.NoError(t, err)
+	defer record.release()
+
+	metadata := record.Metadata()
+	metadata.Tags[0] = "mutated"
+	skills := record.Skills()
+	skills[0].Metadata.Metadata["owner"] = "mutated"
+	skills[0].Resources[0].ID = "mutated"
+	operations := record.Operations()
+	operations[0].Target = "mutated"
+	context := record.Context()
+	context[0].Path = "mutated"
+	providers := record.Providers()
+	providers[0].ServerRef = "mutated"
+
+	assert.Equal(t, "github", record.Metadata().Tags[0])
+	assert.Equal(t, "platform", record.Skills()[0].Metadata.Metadata["owner"])
+	assert.Equal(t, "common-failures", record.Skills()[0].Resources[0].ID)
+	assert.Equal(t, "get_check_runs", record.Operations()[0].Target)
+	assert.Equal(t, "context/repository-conventions.md", record.Context()[0].Path)
+	assert.Equal(t, "github", record.Providers()[0].ServerRef)
+}
+
 func TestLoaderReservesAggregateCapacityBeforeArtifactCopies(t *testing.T) {
 	root := t.TempDir()
 	packageDir := writePackageFixture(t, root, "software.github.ci-debugging")
@@ -223,6 +270,8 @@ func writePackageFixture(t *testing.T, root, id string) string {
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "skills", "github-actions-debugging", "SKILL.md"), []byte(`---
 name: github-actions-debugging
 description: Diagnose GitHub Actions failures from job logs.
+metadata:
+  owner: platform
 ---
 # GitHub Actions debugging
 

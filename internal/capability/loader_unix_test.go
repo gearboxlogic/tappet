@@ -110,3 +110,17 @@ func TestLoaderRejectsSymlinkedIntermediateDirectory(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "package_artifact_invalid")
 }
+
+func TestUnixPackageDirectoryRejectsExistingCharacterDeviceWithoutReading(t *testing.T) {
+	deviceDirectory, err := os.Open("/dev")
+	require.NoError(t, err)
+	defer deviceDirectory.Close()
+	directory := &unixPackageDirectory{file: deviceDirectory}
+
+	file, size, err := directory.OpenRegularFile("null")
+
+	require.Error(t, err)
+	assert.Nil(t, file)
+	assert.Zero(t, size)
+	assert.Contains(t, err.Error(), "is not a regular file")
+}

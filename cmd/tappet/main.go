@@ -60,10 +60,11 @@ func applyOverrides(cfg *config.Config, port, hierarchyPath, capabilityPath stri
 			cfg.McpProxy.Addr = port
 		}
 	}
-	if hierarchyPath != "" {
-		cfg.McpProxy.HierarchyPath = hierarchyPath
-	}
 	if capabilityPath != "" {
 		cfg.McpProxy.CapabilityPath = capabilityPath
+		cfg.McpProxy.HierarchyPath = ""
+	} else if hierarchyPath != "" {
+		cfg.McpProxy.HierarchyPath = hierarchyPath
+		cfg.McpProxy.CapabilityPath = ""
 	}
 }
