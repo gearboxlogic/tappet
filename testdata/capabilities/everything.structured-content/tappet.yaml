@@ -1,0 +1,22 @@
+# Hand-reviewed from hierarchy node everything/structuredContent.json.
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.structured-content
+    name: Structured content example
+    version: 0.1.0
+    description: Return typed weather data and text to verify structured MCP result handling.
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: structured-content
+          description: Return typed weather data and matching text content.
+          provider: everything
+          target: structuredContent
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

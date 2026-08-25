@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/getResourceLinks.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.get-resource-links
+    name: getResourceLinks
+    version: 0.1.0
+    description: Returns multiple resource links that reference different types of resources
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: get-resource-links
+          description: Returns multiple resource links that reference different types of resources
+          provider: everything
+          target: getResourceLinks
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

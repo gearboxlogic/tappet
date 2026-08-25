@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/getTinyImage.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.get-tiny-image
+    name: getTinyImage
+    version: 0.1.0
+    description: Returns the MCP_TINY_IMAGE
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: get-tiny-image
+          description: Returns the MCP_TINY_IMAGE
+          provider: everything
+          target: getTinyImage
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

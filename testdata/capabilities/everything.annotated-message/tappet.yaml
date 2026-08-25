@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/annotatedMessage.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.annotated-message
+    name: annotatedMessage
+    version: 0.1.0
+    description: Demonstrates how annotations can be used to provide metadata about content
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: annotated-message
+          description: Demonstrates how annotations can be used to provide metadata about content
+          provider: everything
+          target: annotatedMessage
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/printEnv.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.print-env
+    name: printEnv
+    version: 0.1.0
+    description: Prints all environment variables, helpful for debugging MCP server configuration
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: print-env
+          description: Prints all environment variables, helpful for debugging MCP server configuration
+          provider: everything
+          target: printEnv
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

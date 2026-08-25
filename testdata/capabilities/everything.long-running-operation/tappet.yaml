@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/longRunningOperation.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.long-running-operation
+    name: longRunningOperation
+    version: 0.1.0
+    description: Demonstrates a long running operation with progress updates
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: long-running-operation
+          description: Demonstrates a long running operation with progress updates
+          provider: everything
+          target: longRunningOperation
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

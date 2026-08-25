@@ -1,0 +1,22 @@
+# Hand-reviewed from hierarchy node everything/echo.json.
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.echo
+    name: Text echo
+    version: 0.1.0
+    description: Return supplied text unchanged through the Everything MCP provider.
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: echo
+          description: Return supplied text unchanged.
+          provider: everything
+          target: echo
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

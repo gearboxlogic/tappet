@@ -1,0 +1,31 @@
+# Hand-reviewed from hierarchy node everything/add.json.
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.add
+    name: Numeric addition
+    version: 0.1.0
+    description: Add two numeric values with the Everything MCP provider.
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    skills:
+        - path: skills/numeric-addition
+          resources:
+            - id: number-inputs
+              kind: reference
+              path: references/number-inputs.md
+    context:
+        - id: provider-behavior
+          path: context/provider-behavior.md
+    operations:
+        - id: add
+          description: Add two numeric values.
+          provider: everything
+          target: add
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

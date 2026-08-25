@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/getResourceReference.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.get-resource-reference
+    name: getResourceReference
+    version: 0.1.0
+    description: Returns a resource reference that can be used by MCP clients
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: get-resource-reference
+          description: Returns a resource reference that can be used by MCP clients
+          provider: everything
+          target: getResourceReference
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

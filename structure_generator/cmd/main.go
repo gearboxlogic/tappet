@@ -183,7 +183,17 @@ func main() {
 	outputDir := flag.String("output", "./structure", "Output directory for generated structure")
 	configPath := flag.String("config", "", "Path to MCP server config JSON (to fetch tools from live servers)")
 	regenerateRoot := flag.Bool("regenerate", false, "Regenerate hierarchy from existing structure (preserves manual edits)")
+	candidateSource := flag.String("capability-candidates-from", "", "Generate V1-alpha capability candidates from a hierarchy directory")
 	flag.Parse()
+
+	if *candidateSource != "" {
+		log.Printf("Generating capability candidates from %s into %s", *candidateSource, *outputDir)
+		if err := generator.GenerateCapabilityCandidates(*candidateSource, *outputDir); err != nil {
+			log.Fatalf("Failed to generate capability candidates: %v", err)
+		}
+		fmt.Printf("Generated capability candidates in %s\n", *outputDir)
+		return
+	}
 
 	// Mode 0: Regenerate hierarchy
 	if *regenerateRoot {
@@ -235,7 +245,8 @@ func main() {
 		log.Fatal("Usage:\n" +
 			"  Mode 1 (fetch from live servers):  go run cmd/main.go -config <config.json>\n" +
 			"  Mode 2 (use pre-fetched data):     go run cmd/main.go -input <file1.json> -input <file2.json>\n" +
-			"  Mode 3 (regenerate hierarchy):     go run cmd/main.go -regenerate -output <structure_dir>\n\n" +
+			"  Mode 3 (regenerate hierarchy):     go run cmd/main.go -regenerate -output <structure_dir>\n" +
+			"  Mode 4 (capability candidates):    go run cmd/main.go -capability-candidates-from <hierarchy_dir> -output <candidate_dir>\n\n" +
 			"Examples:\n" +
 			"  go run cmd/main.go -config tests/test_data/test_config.json\n" +
 			"  go run cmd/main.go -input tests/test_data/github_tools.json -input tests/test_data/everything_tools.json\n" +

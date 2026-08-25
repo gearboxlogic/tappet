@@ -1,0 +1,23 @@
+# Generated capability candidate. Review before installation.
+# Source hierarchy node: everything/sampleLLM.json
+apiVersion: tappet.gearboxlogic.dev/v1alpha1
+kind: Capability
+metadata:
+    id: everything.sample-llm
+    name: sampleLLM
+    version: 0.1.0
+    description: Samples from an LLM using MCP's sampling feature
+    tags:
+        - mcp
+        - everything
+spec:
+    parent: everything
+    operations:
+        - id: sample-llm
+          description: Samples from an LLM using MCP's sampling feature
+          provider: everything
+          target: sampleLLM
+    providers:
+        - id: everything
+          type: mcp
+          serverRef: everything

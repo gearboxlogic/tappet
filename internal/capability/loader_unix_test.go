@@ -4,6 +4,7 @@ package capability
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -42,12 +43,17 @@ func TestLoaderRejectsSpecialAndLinkedArtifactsWithoutBlocking(t *testing.T) {
 		{
 			name: "socket",
 			create: func(t *testing.T, target string) {
-				listener, err := net.Listen("unix", target)
+				shortPath := filepath.Join(os.TempDir(), fmt.Sprintf("tappet-capability-%d.sock", time.Now().UnixNano()))
+				listener, err := net.Listen("unix", shortPath)
 				if errors.Is(err, unix.EPERM) {
 					t.Skip("sandbox does not permit Unix-domain sockets")
 				}
 				require.NoError(t, err)
-				t.Cleanup(func() { _ = listener.Close() })
+				require.NoError(t, os.Rename(shortPath, target))
+				t.Cleanup(func() {
+					_ = listener.Close()
+					_ = os.Remove(shortPath)
+				})
 			},
 		},
 		{
