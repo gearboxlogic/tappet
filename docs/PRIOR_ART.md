@@ -261,7 +261,8 @@ Authoritative sources:
 
 - https://agentskills.io
 - https://github.com/agentskills/agentskills
-- inspected specification blob `d9a2db099d905da8b879a5c6f996728073985279`
+- inspected specification commit `69ef37e9424c0a7ea9dd2293b559e43ec8176379`
+  on 2026-08-25
 
 The format already defines the progressive pattern Tappet needs:
 
@@ -278,7 +279,7 @@ Important constraints:
 - bounded metadata
 - recommended `SKILL.md` size
 - one-level references
-- official validator
+- reference validator rules at the pinned commit
 - experimental `allowed-tools` is not an authorization contract
 
 ## 10. MCP 2026-07-28

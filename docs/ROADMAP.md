@@ -78,6 +78,12 @@ Exit criteria:
 
 ## Milestone 2: Capability package and registry
 
+Status: **complete as of 2026-08-25**. The
+[completion audit](MILESTONE_2_AUDIT.md) maps every work item and exit
+criterion to executable evidence. The
+[manual acceptance record](MILESTONE_2_MANUAL_ACCEPTANCE.md) passed all 15
+checks on 2026-08-25.
+
 Outcome: Tappet loads validated capability packages instead of treating hierarchy JSON as the domain model.
 
 Work:
@@ -398,7 +404,7 @@ Do not attempt all clients in parallel.
 - distributed activation/session state
 - context RAG or knowledge reconciliation
 
-## First implementation assignment
+## First implementation assignment (completed in Milestone 0)
 
 The first code PR after this architecture PR should be narrow:
 

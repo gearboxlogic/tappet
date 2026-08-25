@@ -14,6 +14,10 @@ roles. Run the same gate locally with:
 ./script/test-mcp-conformance.sh
 ```
 
+The 2026-08-25 verification starts the outward server from
+`testdata/capabilities`; the official matrix therefore exercises the
+package-backed runtime rather than the compatibility hierarchy.
+
 The CI gate uses exact check-level expected-failure files under
 `conformance/`. These are scope declarations, not claims that raw suite output
 has no failures. The runner fails when an unexpected check fails or when an

@@ -1,6 +1,10 @@
 # Tappet structure generator
 
-`tappet-structure-generator` connects to each stdio, SSE, or Streamable HTTP provider in a Tappet configuration, lists its tools, and writes the JSON hierarchy consumed by the current broker. It expands environment placeholders in provider commands, arguments, environment values, URLs, and header values.
+`tappet-structure-generator` connects to each stdio, SSE, or Streamable HTTP
+provider in a Tappet configuration, lists its tools, and writes the inherited
+JSON hierarchy format. It can then convert that hierarchy into review-required
+capability-package candidates. It expands environment placeholders in provider
+commands, arguments, environment values, URLs, and header values.
 
 ```bash
 make build
@@ -42,4 +46,23 @@ Package use:
 import generator "github.com/gearboxlogic/tappet/structure_generator"
 ```
 
-This generator produces the inherited hierarchy format. It does not produce capability packages.
+## Capability-package candidates
+
+An existing hierarchy can be converted without contacting providers:
+
+```bash
+./build/tappet-structure-generator \
+  --capability-candidates-from testdata/mcp_hierarchy \
+  --output /tmp/tappet-capability-candidates
+```
+
+Each hierarchy leaf becomes one deterministic V1-alpha candidate package. The
+conversion preserves the downstream provider and `maps_to` target, normalizes
+the capability and operation IDs, and omits provider configuration, tool
+schemas, and annotations. Every manifest carries a generated-review marker.
+
+The generator refuses to replace an output tree that contains a reviewed or
+unrecognized package. Remove the marker only after reviewing capability
+boundaries, names, descriptions, provider bindings, and any manually added
+skills or context. Generated output is a migration aid, not authoritative
+semantic grouping.

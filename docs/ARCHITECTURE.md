@@ -1,8 +1,8 @@
 # Tappet Architecture
 
-Status: **accepted direction; interfaces remain V1-alpha proposals**
+Status: **accepted direction; Milestones 0 through 2 implemented, later interfaces remain proposals**
 
-Last researched: **2026-08-23**
+Last researched: **2026-08-25**
 
 ## 1. Problem
 
@@ -226,6 +226,10 @@ Tappet core should not claim literal context deletion unless a tested adapter pr
 
 ### 6.1 Package loader and validator
 
+Milestone 2 implements this component in `internal/capability`. Linux and macOS
+use descriptor-relative, no-follow, nonblocking local ingestion; unsupported
+platforms reject local package ingestion explicitly.
+
 Responsibilities:
 
 - discover package manifests
@@ -238,6 +242,10 @@ Responsibilities:
 The package manifest is the source of truth. The search index and provider metadata cache are derived.
 
 ### 6.2 Registry
+
+Milestone 2 implements a process-local immutable-generation registry with exact
+ID lookup, deterministic hierarchy browsing, atomic add/reinstall/uninstall,
+and package/provider-binding leases for queued and active invocations.
 
 The registry stores normalized capability records and supports:
 
@@ -1340,15 +1348,18 @@ enable unsupported callbacks or override this negotiation policy.
 
 | Current code | Reusable idea | Required change |
 | --- | --- | --- |
-| `internal/hierarchy` | compact hierarchy and tool mapping | generalize nodes into capability records |
-| `get_tools_in_category` | progressive browsing | add exact and lexical search; return capability cards |
-| `execute_tool` | stable broker invocation | invoke logical capability operations and preserve typed results |
-| `ServerRegistry` | lazy provider startup | add lifecycle modes, idle shutdown, metadata cache, modern negotiation |
-| structure generator | provider inventory capture | generate capability-package candidates, not only hierarchy JSON |
+| `internal/capability` | validated packages, immutable snapshots and generations | add catalog search and progressive reads in Milestone 3 |
+| `internal/hierarchy` | provider execution plus compatibility hierarchy | replace overlapping lifecycle code with one provider manager in Milestone 4 |
+| `get_tools_in_category` | fixed-surface package hierarchy browsing | add exact and lexical search; return capability cards |
+| `execute_tool` | leased logical operation invocation with typed results | migrate to the proposed `tappet.invoke` contract after metadata management exists |
+| `ServerRegistry` | lazy provider startup | add lifecycle modes, idle shutdown, metadata cache, and bounded admission |
+| structure generator | provider inventory and capability candidate generation | retain review-required package boundaries |
 | per-server mutex | bounded same-provider access | retain only where transport/client requires it |
 | permission hooks | proof that broker surfaces obscure native permissions | keep as optional integration; do not expand into IAM |
 
-Legacy `Client` lazy-tool activation and recursive hierarchy behavior overlap. They should be simplified behind one provider manager rather than maintained as separate architectures.
+The unused legacy `Client` activation path has been retired. Package and
+compatibility-hierarchy backends now share one provider execution path, while
+the remaining `ServerRegistry` lifecycle work belongs to Milestone 4.
 
 ## 11. Initial API proposal
 

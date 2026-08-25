@@ -22,7 +22,8 @@ The repository began from the January 2026 `voicetreelab/lazy-mcp` implementatio
 Verified current behavior:
 
 - the public MCP surface consists of `get_tools_in_category` and `execute_tool`
-- tool hierarchy data is stored as generated JSON files
+- the primary runtime domain model is a validated V1-alpha capability package
+  registry; generated hierarchy JSON remains a compatibility backend
 - downstream MCP servers start lazily on first invocation
 - downstream clients remain open until Tappet exits
 - modern 2026-07-28 discovery and stateless requests are supported, with
@@ -30,14 +31,20 @@ Verified current behavior:
 - downstream messages are bounded and validated before SDK decoding; provider
   event admission and callback rejection are bounded
 - official 2025-11-25 and 2026-07-28 server/client conformance baselines run in CI
-- the unused provider-level `activate_<provider>` lazy-loading path has been retired; the shipped recursive hierarchy broker is the only lazy invocation path
+- the unused provider-level `activate_<provider>` lazy-loading path has been
+  retired; capability and compatibility-hierarchy backends share the shipped
+  lazy provider invocation path
 - the module path is `github.com/gearboxlogic/tappet` and shipped binaries use Tappet names
 - the MCP dependency is `github.com/mark3labs/mcp-go v1.0.0-beta.1`
 - downstream clients use modern `server/discover` and stateless per-request
   metadata when available, with legacy initialize fallback through 2025-11-25
 - stdio and HTTP transports share one outward server constructor
 - characterization and generator tests are active; obsolete `.skip` suites were retired with recorded dispositions
-- skills, capability manifests, catalog search, idle provider shutdown, and harness adapters do not yet exist
+- closed capability manifests, listed Agent Skills, local references, immutable
+  process-local snapshots, exact lookup, deterministic hierarchy browsing, and
+  registry generation leases are implemented
+- catalog search, progressive artifact reads, metadata caching, idle provider
+  shutdown, and harness adapters do not yet exist
 
 Do not describe planned behavior as implemented behavior.
 

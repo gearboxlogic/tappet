@@ -1,8 +1,18 @@
 # Capability Package Format
 
-Status: **V1-alpha design proposal**
+Status: **V1-alpha package core implemented; later materialization and durable-store sections remain accepted design**
 
-This document defines the durable package model Tappet should implement before introducing broader runtime features.
+This document defines Tappet's durable package model. Milestone 2 implements
+the closed manifest, Agent Skills validation, safe local ingestion, private
+content-addressed snapshots, immutable normalized records, exact lookup,
+hierarchy browsing, generation leases, and candidate migration.
+
+The current store and installed registry are process-local and rebuilt from the
+configured package directory at startup, as permitted by `ARCHITECTURE.md`
+section 6.2. Progressive artifact reads and continuation handles are Milestone
+3 work. Persistent restart recovery, provider metadata fingerprints, and strict
+target validation are later work. Sections describing those features specify
+the accepted end-state contract and must not be read as current behavior.
 
 ## 1. Package goals
 
@@ -335,9 +345,10 @@ per-artifact maximum. It then copies through a bounded reader with one sentinel
 byte into a private Tappet-owned staging object while computing the exact length
 and digest. Growth beyond the reservation or per-artifact maximum aborts the
 install; a shorter complete copy releases unused capacity. Tappet then closes
-the source, durably finishes the staging write, prevents further writes to that
+the source, finishes the private staging write, prevents further writes to that
 object, and performs parsing, reference checks, Agent Skills validation, and
-normalization only through a read-only descriptor for the staged bytes. A
+normalization only through the staged bytes. A persistent store adapter must
+also durably commit the staging write before publication. A
 concurrent source rewrite may change what the bounded copy observes, but it
 cannot make the published bytes differ from the bytes that were validated.
 
@@ -354,8 +365,10 @@ Changing a source package requires an explicit reinstall that creates a new
 snapshot and manifest digest; in-place source writes cannot change an already
 published artifact reference.
 
-Install, reinstall, and uninstall update the durable installed-package registry
-as one atomic generation. A successful reinstall first commits and validates
+Install, reinstall, and uninstall update the installed-package registry as one
+atomic generation. The Milestone 2 registry is process-local; a later
+persistent adapter must preserve the same atomic contract across restarts. A
+successful reinstall first commits and validates
 the new snapshot, then swaps the registry entry; the previous generation becomes
 unreachable to new initial `read` calls and its old artifact references return
 the typed stale-reference result. An explicit continuation handle issued before

@@ -2,14 +2,17 @@
 
 Tappet is an MCP broker that exposes two tools:
 
-- `get_tools_in_category(path)` browses a generated JSON hierarchy.
+- `get_tools_in_category(path)` browses validated capability packages.
 - `execute_tool(tool_path, arguments)` starts the mapped downstream MCP provider on first use and forwards the call.
 
 The current implementation keeps downstream providers open until Tappet shuts down. It serializes calls to the same provider and permits calls to different providers to run concurrently. The outward tool names are inherited compatibility contracts and have not changed in this baseline.
 
-Tappet does not yet implement capability packages, Agent Skills loading,
-search, metadata caching, idle provider shutdown, or the planned broker API.
-See [the architecture](docs/ARCHITECTURE.md), [package proposal](docs/CAPABILITY_PACKAGE.md),
+Tappet now loads closed V1-alpha capability manifests, validates listed Agent
+Skills and references from private staged bytes, and publishes immutable
+in-memory registry generations. Search, progressive artifact reads, metadata
+caching, idle provider shutdown, and the planned four-tool broker API are later
+milestones.
+See [the architecture](docs/ARCHITECTURE.md), [package format](docs/CAPABILITY_PACKAGE.md),
 [MCP conformance matrix](docs/MCP_CONFORMANCE.md), and [roadmap](docs/ROADMAP.md)
 for accepted boundaries, verified protocol behavior, and planned work.
 
@@ -28,15 +31,21 @@ build/tappet
 build/tappet-structure-generator
 ```
 
-Both commands are shipped in release archives. The structure generator remains a supported companion command because the current broker loads its hierarchy from generated JSON.
+Both commands are shipped in release archives. The structure generator remains
+a supported companion command for provider inventory and for generating
+review-required capability-package candidates from an inherited hierarchy.
 
-Generate a hierarchy from the providers in `config.json`:
+Generate reviewable package candidates from an existing hierarchy:
 
 ```bash
 ./build/tappet-structure-generator \
-  --config config.json \
-  --output testdata/mcp_hierarchy
+  --capability-candidates-from testdata/mcp_hierarchy \
+  --output /tmp/tappet-capability-candidates
 ```
+
+Generated candidates are not authoritative capability boundaries. Review them
+before moving them into the configured package root. The legacy hierarchy
+generator and runtime backend remain available as a compatibility path.
 
 Run Tappet over stdio:
 
@@ -60,7 +69,10 @@ get_tools_in_category("everything")
 execute_tool("everything.echo", {"message": "hello"})
 ```
 
-The first two calls read local hierarchy JSON and do not start the `everything` provider. The third call starts and initializes it, maps the hierarchy path to the downstream tool name, and returns the MCP result without flattening structured content.
+The first two calls browse immutable package records and do not start the
+`everything` provider. The third call leases the package generation, starts and
+initializes the provider, resolves the operation binding, and returns the MCP
+result without flattening structured content.
 
 ## Permission-hook examples
 
