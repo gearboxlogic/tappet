@@ -1,6 +1,6 @@
 # Capability Package Format
 
-Status: **V1-alpha package core implemented; later materialization and durable-store sections remain accepted design**
+Status: **V1-alpha package core and internal process-local progressive reads implemented; durable-store sections remain accepted design**
 
 This document defines Tappet's durable package model. Milestone 2 implements
 the closed manifest, Agent Skills validation, safe local ingestion, private
@@ -9,10 +9,12 @@ hierarchy browsing, generation leases, and candidate migration.
 
 The current store and installed registry are process-local and rebuilt from the
 configured package directory at startup, as permitted by `ARCHITECTURE.md`
-section 6.2. Progressive artifact reads and continuation handles are Milestone
-3 work. Persistent restart recovery, provider metadata fingerprints, and strict
-target validation are later work. Sections describing those features specify
-the accepted end-state contract and must not be read as current behavior.
+section 6.2. Milestone 3 implements process-local immutable structure
+projections and artifact-level continuation leases for skills and listed
+references. Persistent restart recovery, provider metadata fingerprints, and
+strict target validation are later work. Sections describing those features
+specify the accepted end-state contract and must not be read as current
+behavior.
 
 ## 1. Package goals
 

@@ -424,6 +424,13 @@ admission fails before the first chunk is promised if continuation and replay
 capacity cannot be reserved. These are explicit application handles independent
 of the broker transport or MCP protocol session.
 
+The process-local Milestone 3 implementation caps live read leases at 256,
+pinned artifact bytes at 512 MiB, and replay reservations at 32 MiB. Each lease
+reserves one 128 KiB replay slot before its first response. Describe retains at
+most 128 immutable projections totaling 64 MiB. Configured values may be lower
+but cannot exceed those hard maxima. Expired state is swept before admission,
+and closing either store releases all reservations.
+
 An inline `invoke` result keeps the downstream MCP result at the outer protocol
 level. Tappet forwards every provider content block in the outer
 `CallToolResult.Content`; text, image, and audio blocks remain unchanged. An
@@ -1356,9 +1363,9 @@ enable unsupported callbacks or override this negotiation policy.
 
 | Current code | Reusable idea | Required change |
 | --- | --- | --- |
-| `internal/capability` | validated packages, immutable snapshots and generations | add catalog search and progressive reads in Milestone 3 |
+| `internal/capability` | validated packages, immutable snapshots and generations | internal lexical search, structure projections, catalog paging, and progressive package-artifact reads are implemented; provider schemas and spills remain later milestones |
 | `internal/hierarchy` | provider execution plus compatibility hierarchy | replace overlapping lifecycle code with one provider manager in Milestone 4 |
-| `get_tools_in_category` | fixed-surface package hierarchy browsing | add exact and lexical search; return capability cards |
+| `get_tools_in_category` | fixed-surface package hierarchy browsing | keep as compatibility surface; wire internal catalog search to `tappet.search` in Milestone 5 |
 | `execute_tool` | leased logical operation invocation with typed results | migrate to the proposed `tappet.invoke` contract after metadata management exists |
 | `ServerRegistry` | lazy provider startup | add lifecycle modes, idle shutdown, metadata cache, and bounded admission |
 | structure generator | provider inventory and capability candidate generation | retain review-required package boundaries |

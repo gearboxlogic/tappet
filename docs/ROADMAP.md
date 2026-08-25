@@ -116,12 +116,19 @@ Exit criteria:
 
 ## Milestone 3: Catalog search and progressive reads
 
-Status: **in progress as of 2026-08-25**. The bounded internal `lexical-v1`
-search core, frozen adversarially reviewed corpus, deterministic evaluator, and
-acceptance gates are implemented. Public MCP search exposure, `describe`, and
-progressive artifact reads remain incomplete.
+Status: **complete as of 2026-08-25**. The bounded internal `lexical-v1`
+search core, frozen adversarially reviewed corpus, deterministic evaluator,
+immutable structure projections, catalog and describe pagination, and
+progressive skill/reference reads are implemented. The public `tappet.*` MCP
+surface remains deliberately deferred to Milestone 5.
 
-Outcome: an agent can find a capability without loading its schemas or skill body.
+Completion evidence is recorded in the
+[`Milestone 3 audit`](MILESTONE_3_AUDIT.md) and
+[`manual acceptance record`](MILESTONE_3_MANUAL_ACCEPTANCE.md).
+
+Outcome: the internal capability core can find and progressively materialize a
+capability without loading its schemas or skill body. Agent-facing MCP exposure
+is Milestone 5 work.
 
 The accepted [`lexical-v1` search contract](MILESTONE_3_SEARCH_CONTRACT.md)
 defines identifier matching, path filtering, indexed fields, normalization,
