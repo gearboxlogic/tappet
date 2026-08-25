@@ -1,0 +1,75 @@
+# Pinned check-level baseline for @modelcontextprotocol/conformance
+# 0.2.0-alpha.11. Tappet supports the legacy handshake and transport contract,
+# but its fixed broker does not expose the suite's optional fixture surfaces.
+server:
+  - completion-complete:completion-complete
+  - elicitation-sep1034-defaults:elicitation-sep1034-general
+  - elicitation-sep1330-enums:elicitation-sep1330-general
+  - prompts-get-embedded-resource:prompts-get-embedded-resource
+  - prompts-get-simple:prompts-get-simple
+  - prompts-get-with-args:prompts-get-with-args
+  - prompts-get-with-image:prompts-get-with-image
+  - prompts-list:prompts-list
+  - resources-list:resources-list
+  - resources-read-binary:resources-read-binary
+  - resources-read-text:resources-read-text
+  - resources-subscribe:resources-subscribe
+  - resources-templates-read:resources-templates-read
+  - resources-unsubscribe:resources-unsubscribe
+  - server-sse-multiple-streams:server-sse-multiple-streams-session
+  - tools-call-audio:tools-call-audio
+  - tools-call-elicitation:tools-call-elicitation
+  - tools-call-embedded-resource:tools-call-embedded-resource
+  - tools-call-error:tools-call-error
+  - tools-call-image:tools-call-image
+  - tools-call-mixed-content:tools-call-mixed-content
+  - tools-call-sampling:tools-call-sampling
+  - tools-call-simple-text:tools-call-simple-text
+  - tools-call-with-logging:tools-call-with-logging
+  - tools-call-with-progress:tools-call-with-progress
+
+# Authentication remains provider-owned. Legacy callback elicitation and the
+# optional standalone GET retry stream are not enabled by Tappet's provider
+# adapter, which must also remain able to negotiate the stateless modern era.
+client:
+  - auth/basic-cimd:cimd-client-id-used
+  - auth/metadata-default:authorization-request
+  - auth/metadata-default:authorization-server-metadata
+  - auth/metadata-default:client-registration
+  - auth/metadata-default:prm-pathbased-requested
+  - auth/metadata-default:token-request
+  - auth/metadata-var1:authorization-request
+  - auth/metadata-var1:authorization-server-metadata
+  - auth/metadata-var1:client-registration
+  - auth/metadata-var1:prm-pathbased-requested
+  - auth/metadata-var1:token-request
+  - auth/metadata-var2:authorization-request
+  - auth/metadata-var2:authorization-server-metadata
+  - auth/metadata-var2:client-registration
+  - auth/metadata-var2:token-request
+  - auth/metadata-var3:authorization-request
+  - auth/metadata-var3:authorization-server-metadata
+  - auth/metadata-var3:client-registration
+  - auth/metadata-var3:token-request
+  - auth/pre-registration:pre-registration-auth
+  - auth/scope-from-scopes-supported:scope-from-scopes-supported
+  - auth/scope-from-www-authenticate:scope-from-www-authenticate
+  - auth/scope-omitted-when-undefined:scope-omitted-when-undefined
+  - auth/scope-retry-limit:scope-retry-limit
+  - auth/scope-step-up:scope-step-up-escalation
+  - auth/scope-step-up:scope-step-up-initial
+  - auth/token-endpoint-auth-basic:resource-parameter-in-authorization
+  - auth/token-endpoint-auth-basic:resource-parameter-in-token
+  - auth/token-endpoint-auth-basic:token-endpoint-auth-method
+  - auth/token-endpoint-auth-none:resource-parameter-in-authorization
+  - auth/token-endpoint-auth-none:resource-parameter-in-token
+  - auth/token-endpoint-auth-none:token-endpoint-auth-method
+  - auth/token-endpoint-auth-post:resource-parameter-in-authorization
+  - auth/token-endpoint-auth-post:resource-parameter-in-token
+  - auth/token-endpoint-auth-post:token-endpoint-auth-method
+  - elicitation-sep1034-client-defaults:client-elicitation-sep1034-boolean-default
+  - elicitation-sep1034-client-defaults:client-elicitation-sep1034-enum-default
+  - elicitation-sep1034-client-defaults:client-elicitation-sep1034-integer-default
+  - elicitation-sep1034-client-defaults:client-elicitation-sep1034-number-default
+  - elicitation-sep1034-client-defaults:client-elicitation-sep1034-string-default
+  - sse-retry:client-sse-graceful-reconnect

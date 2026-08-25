@@ -1,0 +1,97 @@
+# Pinned check-level baseline for @modelcontextprotocol/conformance
+# 0.2.0-alpha.11. These checks require diagnostic tools or optional MCP
+# surfaces that Tappet's fixed two-tool broker intentionally does not expose.
+# A newly passing entry makes the conformance command fail as stale.
+server:
+  - caching:sep-2549-prompts-list-caching-hints
+  - caching:sep-2549-resources-list-caching-hints
+  - caching:sep-2549-resources-templates-list-caching-hints
+  - completion-complete:completion-complete
+  - input-required-result-basic-elicitation:sep-2322-elicitation-incomplete
+  - input-required-result-basic-list-roots:sep-2322-list-roots-incomplete
+  - input-required-result-basic-sampling:sep-2322-sampling-incomplete
+  - input-required-result-capability-check:sep-2322-respect-client-capabilities
+  - input-required-result-ignore-extra-params:sep-2322-ignore-unexpected-params
+  - input-required-result-missing-input-response:sep-2322-missing-response-rerequests
+  - input-required-result-multi-round:sep-2322-multi-round-r1
+  - input-required-result-multiple-input-requests:sep-2322-multiple-inputs-incomplete
+  - input-required-result-non-tool-request:sep-2322-non-tool-incomplete
+  - input-required-result-request-state:sep-2322-request-state-incomplete
+  - input-required-result-result-type:sep-2322-result-type-included
+  - input-required-result-tampered-state:sep-2322-reject-tampered-state
+  - prompts-get-embedded-resource:prompts-get-embedded-resource
+  - prompts-get-simple:prompts-get-simple
+  - prompts-get-with-args:prompts-get-with-args
+  - prompts-get-with-image:prompts-get-with-image
+  - prompts-list:prompts-list
+  - resources-list:resources-list
+  - resources-read-binary:resources-read-binary
+  - resources-read-text:resources-read-text
+  - resources-templates-read:resources-templates-read
+  - sep-2164-resource-not-found:sep-2164-data-uri
+  - sep-2164-resource-not-found:sep-2164-error-code
+  - server-stateless:sep-2575-http-server-no-independent-requests-on-stream
+  - server-stateless:sep-2575-missing-capability-http-400
+  - server-stateless:sep-2575-server-no-log-without-loglevel
+  - server-stateless:sep-2575-server-rejects-undeclared-capability
+  - tools-call-audio:tools-call-audio
+  - tools-call-embedded-resource:tools-call-embedded-resource
+  - tools-call-error:tools-call-error
+  - tools-call-image:tools-call-image
+  - tools-call-mixed-content:tools-call-mixed-content
+  - tools-call-simple-text:tools-call-simple-text
+  - tools-call-with-progress:tools-call-with-progress
+
+# Tappet delegates provider authentication to provider configuration and does
+# not implement OAuth flows. It also advertises no callback capabilities, so
+# callback-driven MRTR fixtures are expected to stop without a retry.
+client:
+  - auth/authorization-server-migration:sep-2352-reregister-on-as-change
+  - auth/basic-cimd:cimd-client-id-used
+  - auth/iss-normalized:sep-2468-client-no-normalization
+  - auth/iss-not-advertised:sep-2468-client-proceed-no-iss
+  - auth/iss-supported-missing:sep-2468-client-reject-missing-iss
+  - auth/iss-supported:sep-2468-client-compare-iss-supported
+  - auth/iss-unexpected:sep-2468-client-compare-iss-unadvertised
+  - auth/iss-wrong-issuer:sep-2468-client-compare-iss-supported
+  - auth/metadata-default:authorization-request
+  - auth/metadata-default:authorization-server-metadata
+  - auth/metadata-default:client-registration
+  - auth/metadata-default:prm-pathbased-requested
+  - auth/metadata-default:token-request
+  - auth/metadata-issuer-mismatch:sep-2468-client-validate-metadata-issuer
+  - auth/metadata-var1:authorization-request
+  - auth/metadata-var1:authorization-server-metadata
+  - auth/metadata-var1:client-registration
+  - auth/metadata-var1:prm-pathbased-requested
+  - auth/metadata-var1:token-request
+  - auth/metadata-var2:authorization-request
+  - auth/metadata-var2:authorization-server-metadata
+  - auth/metadata-var2:client-registration
+  - auth/metadata-var2:token-request
+  - auth/metadata-var3:authorization-request
+  - auth/metadata-var3:authorization-server-metadata
+  - auth/metadata-var3:client-registration
+  - auth/metadata-var3:token-request
+  - auth/offline-access-not-supported:sep-2207-offline-access-not-requested
+  - auth/offline-access-scope:sep-2207-offline-access-requested
+  - auth/pre-registration:pre-registration-auth
+  - auth/scope-from-scopes-supported:scope-from-scopes-supported
+  - auth/scope-from-www-authenticate:scope-from-www-authenticate
+  - auth/scope-omitted-when-undefined:scope-omitted-when-undefined
+  - auth/scope-retry-limit:scope-retry-limit
+  - auth/scope-step-up:scope-step-up-escalation
+  - auth/scope-step-up:scope-step-up-initial
+  - auth/scope-step-up:sep-2350-scope-union-on-reauth
+  - auth/token-endpoint-auth-basic:resource-parameter-in-authorization
+  - auth/token-endpoint-auth-basic:resource-parameter-in-token
+  - auth/token-endpoint-auth-basic:token-endpoint-auth-method
+  - auth/token-endpoint-auth-none:resource-parameter-in-authorization
+  - auth/token-endpoint-auth-none:resource-parameter-in-token
+  - auth/token-endpoint-auth-none:token-endpoint-auth-method
+  - auth/token-endpoint-auth-post:resource-parameter-in-authorization
+  - auth/token-endpoint-auth-post:resource-parameter-in-token
+  - auth/token-endpoint-auth-post:token-endpoint-auth-method
+  - sep-2322-client-request-state:sep-2322-client-jsonrpc-id-different
+  - sep-2322-client-request-state:sep-2322-client-no-state-omitted
+  - sep-2322-client-request-state:sep-2322-client-request-state-echoed
